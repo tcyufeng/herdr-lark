@@ -100,17 +100,21 @@ async function readStdin(): Promise<string> {
  * question slot between them, then deliver a phone reply to whichever pane
  * ran a command last — the wrong agent acting on the human's instruction.
  *
- * Not the agent session either: `/clear` starts a fresh session in the same
- * window, and the human still sees one window continuing one line of work.
- * Keying on the session would hand them a second group for what looks like
- * the same thing. The session id is still recorded, so a `/clear` is visible
- * and the group can be renamed to the new task.
+ * Not the pane either. A pane id is a position, not an identity: closing a
+ * space, moving the window or resuming a session elsewhere gives the same
+ * conversation a new pane id, and a binding pinned to the old one delivers
+ * nowhere (`agent_not_found`). Observed: one session moved w4:p1 → w7:p1 and
+ * another w5:p1 → w6:p2 while both kept their session id.
+ *
+ * So: key on the session, and look up its pane fresh every time a message has
+ * to be delivered. The pane is still recorded — as a hint for finding the
+ * binding again after a `/clear` starts a new session in the same window.
  */
 function caller(): Caller {
   const root = projectRoot();
   const project = projectLabel(root);
   const id = identifySession(root, project);
-  const key = id.paneId ? `pane:${id.paneId}` : id.sessionId ? `sess:${id.sessionId}` : `proj:${root}`;
+  const key = id.sessionId ? `sess:${id.sessionId}` : id.paneId ? `pane:${id.paneId}` : `proj:${root}`;
   return { key, sessionId: id.sessionId, root, project, task: id.title, paneId: id.paneId };
 }
 

@@ -108,6 +108,10 @@ export async function runDaemon(): Promise<void> {
   }
 
   const bindings = new BindingStore();
+  {
+    const dropped = bindings.pruneDuplicateChats();
+    if (dropped) log('bindings.pruned', { dropped });
+  }
   const pendings = new Map<string, Pending>();
   const lastStatus = new Map<string, string>();
   const lastStatusPush = new Map<string, number>();
@@ -235,10 +239,13 @@ export async function runDaemon(): Promise<void> {
   /** Deliver a free-standing phone message into the project's pane. */
   const inject = async (b: Binding, text: string): Promise<void> => {
     const agents = await agentList();
-    // The binding is keyed by pane, so that is where this group's messages go.
-    // The session id is the fallback for a binding made outside herdr.
-    let paneId = b.paneId;
-    if (!paneId && b.sessionId) paneId = findPaneForSession(agents, b.sessionId);
+    // Look the pane up from the session every time. A stored pane id goes
+    // stale the moment the window is closed, moved, or the session is resumed
+    // somewhere else — and delivering to a pane that no longer exists is how
+    // a message from the phone silently goes nowhere.
+    let paneId = b.sessionId ? findPaneForSession(agents, b.sessionId) : null;
+    if (paneId && paneId !== b.paneId) bindings.touch(b.key, { paneId });
+    if (!paneId) paneId = b.paneId && agents.some((a) => a.pane_id === b.paneId) ? b.paneId : null;
     if (!paneId) paneId = findPaneForProject(agents, b.root);
     if (!paneId) {
       await receipt(b, '这个项目还没有记录到 herdr 窗格，消息没处可送。');
@@ -309,9 +316,13 @@ export async function runDaemon(): Promise<void> {
     return out;
   };
 
+  /** Session ids herdr can see right now. */
+  const liveSessions = async (): Promise<Set<string>> =>
+    new Set((await agentList()).map((a) => a.agent_session?.value).filter((v): v is string => !!v));
+
   channel.on('message', async (msg: NormalizedMessage) => {
     if (msg.senderIsBot) return;
-    const b = bindings.byChat(msg.chatId);
+    const b = bindings.byChat(msg.chatId, await liveSessions());
     if (!b) return;
     const got = await saveResources(msg);
     // A voice message arrives as an `<audio .../>` placeholder in `content`.
@@ -348,7 +359,7 @@ export async function runDaemon(): Promise<void> {
     if (!p || p.done) {
       // A second tap after the question closed: the human is correcting
       // themselves, so it becomes an instruction rather than nothing.
-      const b = bindings.byChat(evt.chatId);
+      const b = bindings.byChat(evt.chatId, await liveSessions());
       if (b) {
         const late = value.optionId ?? '';
         await inject(b, late ? `（补充）我选 ${late}` : '（补充）我又点了一下上面那张卡');
@@ -391,8 +402,9 @@ export async function runDaemon(): Promise<void> {
     // human reads the chat list even while sitting at the keyboard.
     for (const b of all) {
       const a =
-        agents.find((x) => x.pane_id === b.paneId) ??
-        (b.sessionId ? agents.find((x) => x.agent_session?.value === b.sessionId) : undefined);
+        (b.sessionId ? agents.find((x) => x.agent_session?.value === b.sessionId) : undefined) ??
+        agents.find((x) => x.pane_id === b.paneId);
+      if (a && a.pane_id !== b.paneId) bindings.touch(b.key, { paneId: a.pane_id });
       const task = a?.terminal_title_stripped?.trim();
       if (task && task !== b.task) await renameChat(b, task);
     }
@@ -401,7 +413,9 @@ export async function runDaemon(): Promise<void> {
     if (!away.length) return;
     for (const b of away) {
       if (pendingFor(b.key)) continue;
-      const a = agents.find((x) => x.pane_id === b.paneId);
+      const a =
+        (b.sessionId ? agents.find((x) => x.agent_session?.value === b.sessionId) : undefined) ??
+        agents.find((x) => x.pane_id === b.paneId);
       if (!a) continue;
       const prev = lastStatus.get(b.key);
       lastStatus.set(b.key, a.agent_status);
@@ -536,44 +550,32 @@ export async function runDaemon(): Promise<void> {
           // the chat history. The first session in the directory takes it; a
           // second one falls through and gets a group of its own, which is
           // exactly the separation this change is for.
-          // A binding written under an older key (by project, or by agent
-          // session before the pane became the key) but living in this same
-          // pane: take it over, keeping its group and its history.
-          const samePane = c.paneId
-            ? bindings.all().find((x) => x.paneId === c.paneId && x.key !== c.key)
-            : undefined;
-          if (samePane) {
-            bindings.remove(samePane.key);
+          // Take over a binding that is this same conversation under an older
+          // key. In order of confidence: the same agent session (the window
+          // moved), then the same pane (a `/clear` started a new session in
+          // the window the human is still sitting in), then the pre-session
+          // key by project directory.
+          const prior =
+            (c.sessionId
+              ? bindings.all().find((x) => x.sessionId === c.sessionId && x.key !== c.key)
+              : undefined) ??
+            (c.paneId ? bindings.all().find((x) => x.paneId === c.paneId && x.key !== c.key) : undefined) ??
+            bindings.get(`proj:${c.root}`);
+          if (prior) {
+            bindings.remove(prior.key);
             const moved: Binding = {
-              ...samePane,
+              ...prior,
               key: c.key,
               sessionId: c.sessionId,
               task: c.task,
               label: c.project,
-              paneId: c.paneId,
+              paneId: c.paneId ?? prior.paneId,
             };
             bindings.set(moved);
             refreshPolicy();
-            if (c.task && c.task !== samePane.task) void renameChat(moved, c.task);
-            log('bind.resumed', { from: samePane.key, to: c.key, chatId: moved.chatId });
+            if (c.task && c.task !== prior.task) void renameChat(moved, c.task);
+            log('bind.resumed', { from: prior.key, to: c.key, chatId: moved.chatId });
             return { ok: true, kind: 'bind', chatId: moved.chatId, created: false, name: moved.label };
-          }
-
-          const legacy = bindings.get(`proj:${c.root}`);
-          if (legacy) {
-            bindings.remove(legacy.key);
-            const adopted: Binding = {
-              ...legacy,
-              key: c.key,
-              sessionId: c.sessionId,
-              task: c.task,
-              label: c.project,
-              paneId: c.paneId ?? legacy.paneId,
-            };
-            bindings.set(adopted);
-            refreshPolicy();
-            log('bind.adopted', { from: legacy.key, to: c.key, chatId: adopted.chatId });
-            return { ok: true, kind: 'bind', chatId: adopted.chatId, created: false, name: adopted.label };
           }
 
           // No local binding — but the group may already exist from an earlier

@@ -136942,9 +136942,42 @@ var init_bindings = __esm({
       byRoot(root) {
         return [...this.map.values()].filter((b) => b.root === root);
       }
-      byChat(chatId) {
-        for (const b of this.map.values()) if (b.chatId === chatId) return b;
-        return void 0;
+      /**
+       * Which binding a group's messages belong to. `live` says which sessions
+       * herdr can currently see, so that after a window is closed and the same
+       * conversation resumed elsewhere, the group routes to the one that is
+       * actually running rather than to whichever stale record came first.
+       */
+      byChat(chatId, live) {
+        const matches = [...this.map.values()].filter((b) => b.chatId === chatId);
+        if (matches.length <= 1) return matches[0];
+        const running = matches.find((b) => b.sessionId && live?.has(b.sessionId));
+        if (running) return running;
+        return matches.sort((a, b) => b.boundAt.localeCompare(a.boundAt))[0];
+      }
+      /**
+       * Two bindings on one group means one of them is a leftover — a window was
+       * closed and the conversation re-bound elsewhere. Keep the newest and drop
+       * the rest, or a phone message goes to whichever record is found first.
+       */
+      pruneDuplicateChats() {
+        const byChat = /* @__PURE__ */ new Map();
+        for (const b of this.map.values()) {
+          const list = byChat.get(b.chatId) ?? [];
+          list.push(b);
+          byChat.set(b.chatId, list);
+        }
+        let dropped = 0;
+        for (const list of byChat.values()) {
+          if (list.length < 2) continue;
+          list.sort((a, b) => b.boundAt.localeCompare(a.boundAt));
+          for (const stale of list.slice(1)) {
+            this.map.delete(stale.key);
+            dropped += 1;
+          }
+        }
+        if (dropped) this.persist();
+        return dropped;
       }
       all() {
         return [...this.map.values()];
@@ -137230,6 +137263,10 @@ async function runDaemon() {
     }
   }
   const bindings = new BindingStore();
+  {
+    const dropped = bindings.pruneDuplicateChats();
+    if (dropped) log("bindings.pruned", { dropped });
+  }
   const pendings = /* @__PURE__ */ new Map();
   const lastStatus = /* @__PURE__ */ new Map();
   const lastStatusPush = /* @__PURE__ */ new Map();
@@ -137320,8 +137357,9 @@ async function runDaemon() {
   };
   const inject = async (b, text) => {
     const agents = await agentList();
-    let paneId = b.paneId;
-    if (!paneId && b.sessionId) paneId = findPaneForSession(agents, b.sessionId);
+    let paneId = b.sessionId ? findPaneForSession(agents, b.sessionId) : null;
+    if (paneId && paneId !== b.paneId) bindings.touch(b.key, { paneId });
+    if (!paneId) paneId = b.paneId && agents.some((a) => a.pane_id === b.paneId) ? b.paneId : null;
     if (!paneId) paneId = findPaneForProject(agents, b.root);
     if (!paneId) {
       await receipt(b, "\u8FD9\u4E2A\u9879\u76EE\u8FD8\u6CA1\u6709\u8BB0\u5F55\u5230 herdr \u7A97\u683C\uFF0C\u6D88\u606F\u6CA1\u5904\u53EF\u9001\u3002");
@@ -137373,9 +137411,10 @@ async function runDaemon() {
     }
     return out;
   };
+  const liveSessions = async () => new Set((await agentList()).map((a) => a.agent_session?.value).filter((v) => !!v));
   channel.on("message", async (msg) => {
     if (msg.senderIsBot) return;
-    const b = bindings.byChat(msg.chatId);
+    const b = bindings.byChat(msg.chatId, await liveSessions());
     if (!b) return;
     const got = await saveResources(msg);
     let text = msg.content.replace(/<audio\b[^>]*\/?>/gi, "").trim();
@@ -137409,7 +137448,7 @@ ${list}`;
     if (!value.reqId) return;
     const p = pendings.get(value.reqId);
     if (!p || p.done) {
-      const b = bindings.byChat(evt.chatId);
+      const b = bindings.byChat(evt.chatId, await liveSessions());
       if (b) {
         const late = value.optionId ?? "";
         await inject(b, late ? `\uFF08\u8865\u5145\uFF09\u6211\u9009 ${late}` : "\uFF08\u8865\u5145\uFF09\u6211\u53C8\u70B9\u4E86\u4E00\u4E0B\u4E0A\u9762\u90A3\u5F20\u5361");
@@ -137441,7 +137480,8 @@ ${list}`;
     if (!all.length) return;
     const agents = await agentList();
     for (const b of all) {
-      const a = agents.find((x) => x.pane_id === b.paneId) ?? (b.sessionId ? agents.find((x) => x.agent_session?.value === b.sessionId) : void 0);
+      const a = (b.sessionId ? agents.find((x) => x.agent_session?.value === b.sessionId) : void 0) ?? agents.find((x) => x.pane_id === b.paneId);
+      if (a && a.pane_id !== b.paneId) bindings.touch(b.key, { paneId: a.pane_id });
       const task = a?.terminal_title_stripped?.trim();
       if (task && task !== b.task) await renameChat(b, task);
     }
@@ -137449,7 +137489,7 @@ ${list}`;
     if (!away.length) return;
     for (const b of away) {
       if (pendingFor(b.key)) continue;
-      const a = agents.find((x) => x.pane_id === b.paneId);
+      const a = (b.sessionId ? agents.find((x) => x.agent_session?.value === b.sessionId) : void 0) ?? agents.find((x) => x.pane_id === b.paneId);
       if (!a) continue;
       const prev = lastStatus.get(b.key);
       lastStatus.set(b.key, a.agent_status);
@@ -137567,38 +137607,22 @@ ${list}`;
             bindings.touch(c.key, { paneId: c.paneId, label: c.project, task: c.task });
             return { ok: true, kind: "bind", chatId: existing.chatId, created: false, name: existing.label };
           }
-          const samePane = c.paneId ? bindings.all().find((x) => x.paneId === c.paneId && x.key !== c.key) : void 0;
-          if (samePane) {
-            bindings.remove(samePane.key);
+          const prior = (c.sessionId ? bindings.all().find((x) => x.sessionId === c.sessionId && x.key !== c.key) : void 0) ?? (c.paneId ? bindings.all().find((x) => x.paneId === c.paneId && x.key !== c.key) : void 0) ?? bindings.get(`proj:${c.root}`);
+          if (prior) {
+            bindings.remove(prior.key);
             const moved = {
-              ...samePane,
+              ...prior,
               key: c.key,
               sessionId: c.sessionId,
               task: c.task,
               label: c.project,
-              paneId: c.paneId
+              paneId: c.paneId ?? prior.paneId
             };
             bindings.set(moved);
             refreshPolicy();
-            if (c.task && c.task !== samePane.task) void renameChat(moved, c.task);
-            log("bind.resumed", { from: samePane.key, to: c.key, chatId: moved.chatId });
+            if (c.task && c.task !== prior.task) void renameChat(moved, c.task);
+            log("bind.resumed", { from: prior.key, to: c.key, chatId: moved.chatId });
             return { ok: true, kind: "bind", chatId: moved.chatId, created: false, name: moved.label };
-          }
-          const legacy = bindings.get(`proj:${c.root}`);
-          if (legacy) {
-            bindings.remove(legacy.key);
-            const adopted = {
-              ...legacy,
-              key: c.key,
-              sessionId: c.sessionId,
-              task: c.task,
-              label: c.project,
-              paneId: c.paneId ?? legacy.paneId
-            };
-            bindings.set(adopted);
-            refreshPolicy();
-            log("bind.adopted", { from: legacy.key, to: c.key, chatId: adopted.chatId });
-            return { ok: true, kind: "bind", chatId: adopted.chatId, created: false, name: adopted.label };
           }
           const marker = `herdr-lark \xB7 ${c.key}`;
           try {
@@ -137928,7 +137952,7 @@ function caller() {
   const root = projectRoot();
   const project = projectLabel(root);
   const id = identifySession(root, project);
-  const key = id.paneId ? `pane:${id.paneId}` : id.sessionId ? `sess:${id.sessionId}` : `proj:${root}`;
+  const key = id.sessionId ? `sess:${id.sessionId}` : id.paneId ? `pane:${id.paneId}` : `proj:${root}`;
   return { key, sessionId: id.sessionId, root, project, task: id.title, paneId: id.paneId };
 }
 function finish(res, onOk) {

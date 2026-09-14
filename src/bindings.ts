@@ -70,9 +70,43 @@ export class BindingStore {
     return [...this.map.values()].filter((b) => b.root === root);
   }
 
-  byChat(chatId: string): Binding | undefined {
-    for (const b of this.map.values()) if (b.chatId === chatId) return b;
-    return undefined;
+  /**
+   * Which binding a group's messages belong to. `live` says which sessions
+   * herdr can currently see, so that after a window is closed and the same
+   * conversation resumed elsewhere, the group routes to the one that is
+   * actually running rather than to whichever stale record came first.
+   */
+  byChat(chatId: string, live?: Set<string>): Binding | undefined {
+    const matches = [...this.map.values()].filter((b) => b.chatId === chatId);
+    if (matches.length <= 1) return matches[0];
+    const running = matches.find((b) => b.sessionId && live?.has(b.sessionId));
+    if (running) return running;
+    return matches.sort((a, b) => b.boundAt.localeCompare(a.boundAt))[0];
+  }
+
+  /**
+   * Two bindings on one group means one of them is a leftover — a window was
+   * closed and the conversation re-bound elsewhere. Keep the newest and drop
+   * the rest, or a phone message goes to whichever record is found first.
+   */
+  pruneDuplicateChats(): number {
+    const byChat = new Map<string, Binding[]>();
+    for (const b of this.map.values()) {
+      const list = byChat.get(b.chatId) ?? [];
+      list.push(b);
+      byChat.set(b.chatId, list);
+    }
+    let dropped = 0;
+    for (const list of byChat.values()) {
+      if (list.length < 2) continue;
+      list.sort((a, b) => b.boundAt.localeCompare(a.boundAt));
+      for (const stale of list.slice(1)) {
+        this.map.delete(stale.key);
+        dropped += 1;
+      }
+    }
+    if (dropped) this.persist();
+    return dropped;
   }
 
   all(): Binding[] {
