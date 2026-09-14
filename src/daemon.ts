@@ -218,34 +218,87 @@ export async function runDaemon(): Promise<void> {
     if (!outcome.ok) await receipt(b, explainPromptFailure(outcome.code, outcome.message));
   };
 
-  /** Save an inbound image/file next to the daemon's state, never in the repo. */
-  const saveResources = async (msg: NormalizedMessage): Promise<string[]> => {
-    if (!msg.resources.length) return [];
+  /**
+   * Transcribe one voice message. Feishu's file_recognize takes base64 opus
+   * and caps at 60 s. Needs the `speech_to_text:speech` scope — without it
+   * the call fails and the caller falls back to saying so plainly, which is
+   * far better than handing the agent an `<audio .../>` placeholder it cannot
+   * read and will silently misinterpret as text.
+   */
+  const transcribe = async (audioPath: string): Promise<string | null> => {
+    try {
+      const b64 = readFileSync(audioPath).toString('base64');
+      const res = await (channel.rawClient as unknown as {
+        speech_to_text: {
+          speech: {
+            fileRecognize(req: unknown): Promise<{ data?: { recognition_text?: string } }>;
+          };
+        };
+      }).speech_to_text.speech.fileRecognize({
+        data: {
+          speech: { speech: b64 },
+          config: { file_id: createHash('sha1').update(audioPath).digest('hex').slice(0, 16), format: 'opus', engine_type: '16k_auto' },
+        },
+      });
+      const text = res.data?.recognition_text?.trim();
+      return text || null;
+    } catch (err) {
+      log('transcribe.failed', { err: String(err).slice(0, 200) });
+      return null;
+    }
+  };
+
+  /** Save an inbound attachment next to the daemon's state, never in the repo. */
+  const saveResources = async (msg: NormalizedMessage): Promise<{ files: string[]; spoken: string[]; unheard: number }> => {
+    const out = { files: [] as string[], spoken: [] as string[], unheard: 0 };
+    if (!msg.resources.length) return out;
     const dir = join(homeDir(), 'media', createHash('sha1').update(msg.chatId).digest('hex').slice(0, 12));
     mkdirSync(dir, { recursive: true, mode: 0o700 });
-    const saved: string[] = [];
     for (const res of msg.resources) {
-      if (res.type !== 'image' && res.type !== 'file') continue;
-      const name = res.fileName ?? `${res.type}-${Date.now()}.${res.type === 'image' ? 'png' : 'bin'}`;
+      // Only images have their own download type; everything else (files,
+      // voice notes, video) comes down the `file` path.
+      const kind = res.type === 'image' ? 'image' : 'file';
+      const ext = res.type === 'image' ? 'png' : res.type === 'audio' ? 'opus' : 'bin';
+      const name = res.fileName ?? `${res.type}-${Date.now()}.${ext}`;
       const dest = join(dir, `${Date.now()}-${name}`);
       try {
-        await channel.downloadResourceToFile(msg.messageId, res.fileKey, res.type, dest);
-        saved.push(dest);
+        await channel.downloadResourceToFile(msg.messageId, res.fileKey, kind, dest);
       } catch (err) {
-        log('download.failed', { messageId: msg.messageId, err: String(err) });
+        log('download.failed', { messageId: msg.messageId, type: res.type, err: String(err).slice(0, 200) });
+        continue;
       }
+      if (res.type === 'audio') {
+        const text = await transcribe(dest);
+        if (text) out.spoken.push(text);
+        else out.unheard += 1;
+        continue;
+      }
+      out.files.push(dest);
     }
-    return saved;
+    return out;
   };
 
   channel.on('message', async (msg: NormalizedMessage) => {
     if (msg.senderIsBot) return;
     const b = bindings.byChat(msg.chatId);
     if (!b) return;
-    const files = await saveResources(msg);
-    let text = msg.content.trim();
-    if (files.length) {
-      const list = files.map((f) => `  ${f}`).join('\n');
+    const got = await saveResources(msg);
+    // A voice message arrives as an `<audio .../>` placeholder in `content`.
+    // Strip it: either the transcript replaces it, or the human is told
+    // plainly that it could not be heard.
+    let text = msg.content.replace(/<audio\b[^>]*\/?>/gi, '').trim();
+    if (got.spoken.length) {
+      const said = got.spoken.join('\n');
+      text = text ? `${text}\n（语音转文字）${said}` : said;
+    }
+    if (got.unheard) {
+      const why =
+        '（收到 ' + got.unheard + ' 条语音，但转文字失败——多半是应用还没开 speech_to_text:speech 权限。' +
+        '请告诉用户：跑一次 herdr-lark setup --update 重新扫码补上这个权限，或者这次先打字。）';
+      text = text ? `${text}\n${why}` : why;
+    }
+    if (got.files.length) {
+      const list = got.files.map((f) => `  ${f}`).join('\n');
       text = text ? `${text}\n（附件已存到本机）\n${list}` : `（我发了附件，已存到本机）\n${list}`;
     }
     if (!text) return;

@@ -44,6 +44,8 @@ const DEFAULT_SCOPES = [
   'im:message.group_msg',
   'im:chat',
   'im:resource',
+  // Voice messages arrive as an opaque `<audio/>` placeholder without this.
+  'speech_to_text:speech',
 ];
 
 /** Non-Error throws are common in SDKs; never let them print [object Object]. */

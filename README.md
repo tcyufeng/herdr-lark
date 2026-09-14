@@ -1,142 +1,144 @@
 # herdr-lark
 
-把 **herdr 窗格里正在跑的** agent 会话接到飞书。
+**English** | [简体中文](./README.zh-CN.md)
 
-它遇到要你拍板的事，推一张带按钮的飞书卡片到你手机；你点一下或打一句话，答复回到**那个已经跑了两小时、带着全部上下文的会话**里——而不是新开一个。
+Reach the agent session **already running** in your herdr pane — from Feishu/Lark on your phone.
 
-> 和「从飞书启动一个新 agent」的桥方向相反。那类工具解决的是"我不在电脑前，想让本机 agent 干点新活"；这个解决的是"我在干活，人走开了，会话继续跑，有事找我"。
+When it hits something only you can decide, it pushes a card with buttons to your phone. You tap one or type a sentence, and the answer lands back in **that same session** — the one that has been running for two hours and holds all the context. Not a fresh one.
 
-## 需要什么
+> This is the opposite direction from bridges that *start* a new agent from a chat app. Those solve "I'm away from my desk and want the agent to do something new." This solves "I'm in the middle of work, I stepped away, the session is still running — reach me when it matters."
+
+## Requirements
 
 - **Node.js ≥ 20.12**
-- **[herdr](https://herdr.dev)** —— 答复要注入回终端窗格，靠它
-- **一个飞书账号** —— 个人版就行，应用扫码创建，**不需要企业管理员审核**
+- **[herdr](https://herdr.dev)** — answers are injected back into a terminal pane through it
+- **A Feishu/Lark account** — a personal one is enough. The app is created by scanning a QR code; **no workspace-admin approval needed**
 
-## 装
+## Install
 
-skills.sh 只拷文件、不会替你构建，所以装完要自己 build 一次：
+The skills.sh CLI copies files but does not build, so build once after installing:
 
 ```bash
-npx skills add tcyufeng/herdr-lark      # 或者 git clone
-cd <装到的目录> && npm install && npm run build
+npx skills add tcyufeng/herdr-lark      # or just git clone
+cd <where it landed> && npm install && npm run build
 ln -sf "$PWD/dist/cli.js" ~/.local/bin/herdr-lark
 ```
 
-## 配
+## Set up
 
 ```bash
-herdr-lark setup            # 终端出二维码，用飞书扫；应用当场建好
-cd <你的项目> && herdr-lark away on
+herdr-lark setup            # prints a QR code; scan it with Feishu — the app is created on the spot
+cd <your project> && herdr-lark away on
 ```
 
-`setup` 的确认页会列出要授权的权限：收发消息、以应用身份发消息、群内免 @ 收消息、建群、上传下载资源，外加 `im.message.receive_v1` 事件和 `card.action.trigger` 回调。少了哪个可以 `herdr-lark setup --update` 补。
+The confirmation page lists the permissions being requested: send and receive messages, send as the bot, receive group messages without an @-mention, create groups, upload/download resources, transcribe voice — plus the `im.message.receive_v1` event and the `card.action.trigger` callback. Missing one later? `herdr-lark setup --update` adds it to the same app.
 
-`away on` 一条命令把整条通路备齐：检查凭据 → 后台起 daemon → 给这个项目建飞书群（已有则复用）→ 打开开关。
+`away on` is the single command that gets everything ready: check credentials → start the daemon in the background → create (or reuse) this project's group → flip the switch.
 
-已经有应用了就跳过扫码，**secret 从环境变量读，不走命令行**（argv 全机器可见）：
+Already have an app? Skip the QR code. **The secret is read from the environment, never from argv** — argv is visible to every process on the machine:
 
 ```bash
 HERDR_LARK_APP_ID=cli_xxx HERDR_LARK_APP_SECRET=xxx herdr-lark setup
 ```
 
-## 用
+## Use
 
-日常你不用碰这些命令——把 [`examples/remote-mode-rule.md`](./examples/remote-mode-rule.md) 拷到 `~/.claude/rules/`，然后直接对 agent 说「我走了」「我回来了」就行。
+Day to day you don't touch these commands. Copy [`examples/remote-mode-rule.md`](./examples/remote-mode-rule.md) into `~/.claude/rules/` and just tell your agent "I'm heading out" / "I'm back".
 
 ```bash
-herdr-lark ask <<'JSON'      # 推一张提问卡，阻塞等答复，答复到 stdout
+herdr-lark ask <<'JSON'      # push a question card, block, print the answer on stdout
 {"title": "...", "doing": "...", "description": "...", "blocker": "...",
- "options": [{"id":"keep","label":"保留固定目录","consequence":"出问题有现场可看，代价是目录越攒越多"},
-             {"id":"wipe","label":"连历史一起清掉","consequence":"不可恢复","danger":true}],
- "recommend": "keep", "reasoning": "...", "question": "...", "lang": "zh"}
+ "options": [{"id":"keep","label":"Keep the directory","consequence":"A scene to inspect after failures; the cost is clutter"},
+             {"id":"wipe","label":"Wipe history too","consequence":"Unrecoverable","danger":true}],
+ "recommend": "keep", "reasoning": "...", "question": "...", "lang": "en"}
 JSON
 
-herdr-lark say --title "改完了" <<'EOF'   # 把终端回复同步到群（远程模式下每次回复都发）
-正文，markdown。表格、列表、代码块都能渲染。
+herdr-lark say --title "Done" <<'EOF'    # mirror a terminal reply into the group
+Body, in markdown. Tables, lists and code blocks all render.
 EOF
 
-herdr-lark notify <<'JSON'   # 重大事项通知，不阻塞
-{"title": "迁移完成", "body": "..."}
+herdr-lark notify <<'JSON'   # something important, no answer needed
+{"title": "Migration finished", "body": "..."}
 JSON
 
-herdr-lark send-file shot.png --caption "现在的版式"
+herdr-lark send-file shot.png --caption "Current layout"
 herdr-lark status
 ```
 
-字段含义、退出码、写卡片的规矩：[SKILL.md](./SKILL.md)。
+Field-by-field rules, exit codes, and how to write a question worth answering: [SKILL.md](./SKILL.md).
 
-### 三种卡片
+### Three kinds of card
 
-| | 颜色 | 什么时候 |
+| | Colour | When |
 |---|---|---|
-| 🤔 | 蓝 | `ask` —— 要你拍板，带按钮，调用方阻塞等你 |
-| 💬 | 青 | `say` —— 终端回复的逐字同步 |
-| 📣 | 浅蓝 | `notify` —— 重大事项，不用你回 |
+| 🤔 | blue | `ask` — needs your call, has buttons, the caller is blocked on you |
+| 💬 | turquoise | `say` — a terminal reply, mirrored verbatim |
+| 📣 | light blue | `notify` — worth knowing, needs no reply |
 
-`ask` 的按钮**点一下就锁死**（改写后的卡片随回调原路返回，没有重复点击的空窗）。标了 `"danger": true` 的选项是红色按钮 + 二次确认弹窗，而且**永远不能是推荐项**——校验会直接拦下。
+An `ask` button **locks the moment you tap it**: the closed card rides back on the tap's own callback, so there is no window in which a second tap is possible. An option marked `"danger": true` gets a red button behind a native confirm dialog — and **can never be the recommendation**; validation refuses it outright.
 
-### 反向：手机 → 终端
+### The other direction: phone → terminal
 
-群里没有挂着问题时，你发的任何消息都会注入回该项目的 herdr 窗格，前缀 `[herdr-lark remote] `。**发图片也行**——自动下载到本机，路径附在注入的文本里，agent 直接能读。
+When no question is pending, anything you send in the group is injected into that project's herdr pane, prefixed `[herdr-lark remote] `. **Images work too** — they are downloaded locally and the path is appended to the injected text, so the agent can actually open them. **Voice messages are transcribed** through Feishu's speech-to-text.
 
-注入失败（agent 正卡在要你确认的提示上、窗格没了）时，群里会收到一张回执卡。
+If injection fails (the agent is stuck on a prompt only you can answer, the pane is gone), a receipt card appears in the group.
 
-### agent 状态推送
+### Agent state pushes
 
-`away on` 后，agent **卡在需要你确认的提示上**时会推一张卡——你不在就永远卡着，这是真的需要人。
+With `away on`, you get a card when the agent is **stuck on a prompt that needs you** — nobody else can unblock it, and it will wait forever.
 
-「干完了」**默认不推**：每轮对话结束都会触发，你在键盘前时纯属噪音。要的话 `away on --idle 30`，只有跑满 30 分钟的长任务结束才推。
+"Finished" is **off by default**: it fires at the end of every conversational turn, which is pure noise while you are at the keyboard. Want it? `away on --idle 30` — only turns that ran at least 30 minutes.
 
-## 一个项目一个群
+## One project, one group
 
-项目 = git toplevel（不在 git 里就是 cwd），worktree 和 submodule 各算一个。
+A project is the git toplevel (the cwd outside a repo); worktrees and submodules each count as their own.
 
-不是为了好看：单聊里"随口发一句话"没有任何项目归属信息，只能靠"最近活跃"猜，猜错就是把指令注入给了**另一个项目的 agent**，而它会照做。群还能按项目单独设免打扰，正好命中"人走开了"这个场景。
+This is not cosmetics. In a single chat, an offhand message carries no clue about which project it belongs to — the only option is to guess "most recently active", and a wrong guess injects your instruction into **a different project's agent**, which will happily act on it. That is a damaging error, not a display glitch. Per-group notification muting also lands exactly where it matters when you have stepped away.
 
-群自动建、自动复用——按**项目绝对路径**匹配（写在群的 description 里），所以丢了本地绑定记录也不会重复建，两个同名的 worktree 也不会认错。
+Groups are created and reused automatically, matched on the project's **absolute path** (stored in the group description). Losing the local binding file will not create a duplicate, and two worktrees with the same basename will not be confused for each other.
 
-## 凭据
+## Credentials
 
-解析顺序，高到低：
+Resolution order, highest first:
 
-1. 环境变量 `HERDR_LARK_APP_ID` / `HERDR_LARK_APP_SECRET`
-2. env 文件 `~/.config/herdr-lark/.env`（`HERDR_LARK_ENV_FILE` 可改）
-3. **系统钥匙串** —— macOS `security` · Linux `secret-tool` · Windows DPAPI。`setup` 默认写这里
-4. `~/.config/herdr-lark/credentials.json`，0600，权限过宽会警告
-5. 通用的 `LARK_APP_ID` / `LARK_APP_SECRET`
+1. `HERDR_LARK_APP_ID` / `HERDR_LARK_APP_SECRET`
+2. env file `~/.config/herdr-lark/.env` (`HERDR_LARK_ENV_FILE` to move it)
+3. **OS keychain** — macOS `security`, Linux `secret-tool`, Windows DPAPI. This is where `setup` writes
+4. `~/.config/herdr-lark/credentials.json`, mode 0600; a looser mode gets a warning
+5. generic `LARK_APP_ID` / `LARK_APP_SECRET`
 
-第 5 层压在最后，是因为好几个飞书工具都读这对名字，同一台机器跑两个会串。
+Layer 5 is last on purpose: several Feishu tools read those names, so a machine running more than one would otherwise cross-wire.
 
-`herdr-lark status` 会把五层逐行列出来，告诉你实际命中了哪层——**但不会打印任何值**。secret 也永远不走 argv。
+`herdr-lark status` prints all five layers and which one actually matched — **and never prints a value**. Secrets never travel through argv either.
 
-## 东西放在哪
+## Where things live
 
-| 路径 | 内容 |
+| Path | Contents |
 |---|---|
-| `~/.herdr-lark/daemon.sock` | 本地 IPC |
-| `~/.herdr-lark/bindings.json` | 项目 ↔ 群 ↔ 窗格 |
-| `~/.herdr-lark/daemon.log` | 只记 id 和状态变化，**不记消息内容** |
-| `~/.herdr-lark/media/` | 手机发来的图片和文件 |
-| `<项目根>/.herdr-lark/state.json` | 远程模式开关、群 id、窗格 id（自带 `.gitignore`） |
+| `~/.herdr-lark/daemon.sock` | local IPC |
+| `~/.herdr-lark/bindings.json` | project ↔ group ↔ pane |
+| `~/.herdr-lark/daemon.log` | ids and state transitions only — **never message content** |
+| `~/.herdr-lark/media/` | images, files and voice notes from the phone |
+| `<project root>/.herdr-lark/state.json` | remote-mode switch, group id, pane id (ships its own `.gitignore`) |
 
-## 环境变量
+## Environment variables
 
-| 变量 | 默认 | 作用 |
+| Variable | Default | Effect |
 |---|---|---|
-| `HERDR_LARK_HOME` | `~/.herdr-lark` | 状态目录 |
-| `HERDR_LARK_STORE` | 有钥匙串就用钥匙串 | `keychain` / `file` / `none` |
-| `HERDR_LARK_KEYCHAIN` | `herdr-lark` | 钥匙串 service 名 |
-| `HERDR_LARK_ENV_FILE` | `~/.config/herdr-lark/.env` | env 文件位置 |
-| `HERDR_LARK_LANG` | `zh` | 卡片固定文案语言（`zh` / `en`） |
+| `HERDR_LARK_HOME` | `~/.herdr-lark` | state directory |
+| `HERDR_LARK_STORE` | keychain when available | `keychain` / `file` / `none` |
+| `HERDR_LARK_KEYCHAIN` | `herdr-lark` | keychain service name |
+| `HERDR_LARK_ENV_FILE` | `~/.config/herdr-lark/.env` | env file location |
+| `HERDR_LARK_LANG` | `zh` | language of the fixed card wording (`zh` / `en`) |
 
-## 已知边界
+## Known limits
 
-- **只在 macOS 上实跑过。** Linux（`secret-tool`）和 Windows（DPAPI）的凭据存储按平台写了但没实测。
-- 一个项目**同时只能挂一个问题**——第二个 `ask` 直接退 4。文本答复无法关联到具体卡片，所以不做并发。
-- 一个飞书自建应用只服务一个租户。企业号和个人号要各建一个应用，当前版本只存一份凭据。
-- 重启 daemon 会取消所有待答问题（有问题挂着时 `--stop` 会拒绝，除非 `--force`）。
+- **Only exercised on macOS.** The Linux (`secret-tool`) and Windows (DPAPI) credential stores are written per platform but untested.
+- A project holds **one pending question at a time** — a second `ask` exits 4. A typed answer cannot be tied to a specific card, so concurrency is not attempted.
+- One custom Feishu app serves one tenant. A work account and a personal account each need their own app, and this version stores one set of credentials.
+- Restarting the daemon cancels every pending question. `--stop` refuses while any are outstanding unless you pass `--force`.
 
-## 卡片长什么样
+## What the cards look like
 
 ```bash
 node scripts/preview.mjs && open card-preview.html
