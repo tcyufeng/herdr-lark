@@ -183,4 +183,4 @@ and a timeout is not approval.
 `herdr-lark unbind` when the work is done (the Feishu group stays; archiving it is the human's call).
 `herdr-lark status` shows the daemon, where credentials came from, and every binding.
 
-中文文档：[docs/guide.zh-CN.md](docs/guide.zh-CN.md) · [README.zh-CN.md](README.zh-CN.md)
+Chinese documentation: [docs/guide.zh-CN.md](docs/guide.zh-CN.md) · [README.zh-CN.md](README.zh-CN.md)
