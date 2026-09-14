@@ -3,16 +3,12 @@ import { bindingsPath, ensureHomeDir } from './paths.js';
 
 export interface Binding {
   /**
-   * The agent session this group belongs to. Several sessions often run in
-   * the same directory on different tasks — keying on the directory would put
-   * them in one group, give them one question slot between them, and deliver
-   * a phone reply to whichever pane happened to run a command last. That is
-   * the wrong agent acting on your instruction, so the session is the key.
-   *
-   * `pane:<id>` when the session id could not be read, `proj:<root>` outside
-   * herdr entirely.
+   * `pane:<id>` — one window, one group. See `caller()` in cli.ts for why the
+   * pane wins over both the directory and the agent session.
+   * `sess:<id>` or `proj:<root>` when there is no pane to key on.
    */
   key: string;
+  /** Recorded, not keyed on: a change here means the human ran `/clear`. */
   sessionId: string | null;
   /** Project root — no longer the key, but still how bindings are grouped. */
   root: string;

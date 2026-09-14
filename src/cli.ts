@@ -92,21 +92,25 @@ async function readStdin(): Promise<string> {
 }
 
 /**
- * Who is calling. The lease holder is the **agent session**, not the
- * directory: several sessions routinely run in one repo on different tasks,
- * and keying on the directory would give them one group and one question slot
- * between them — and deliver a phone reply to whichever pane ran a command
- * last, i.e. to the wrong agent.
+ * Who is calling. The lease holder is the **herdr pane** — one window, one
+ * group.
+ *
+ * Not the directory: several sessions routinely run in one repo on different
+ * tasks, and keying on the directory would give them one group and one
+ * question slot between them, then deliver a phone reply to whichever pane
+ * ran a command last — the wrong agent acting on the human's instruction.
+ *
+ * Not the agent session either: `/clear` starts a fresh session in the same
+ * window, and the human still sees one window continuing one line of work.
+ * Keying on the session would hand them a second group for what looks like
+ * the same thing. The session id is still recorded, so a `/clear` is visible
+ * and the group can be renamed to the new task.
  */
 function caller(): Caller {
   const root = projectRoot();
   const project = projectLabel(root);
   const id = identifySession(root, project);
-  const key = id.sessionId
-    ? `sess:${id.sessionId}`
-    : id.paneId
-      ? `pane:${id.paneId}`
-      : `proj:${root}`;
+  const key = id.paneId ? `pane:${id.paneId}` : id.sessionId ? `sess:${id.sessionId}` : `proj:${root}`;
   return { key, sessionId: id.sessionId, root, project, task: id.title, paneId: id.paneId };
 }
 

@@ -34,10 +34,13 @@ cd <project> && herdr-lark away on      # starts the daemon, creates this projec
 reuses) a Feishu group for this project, and only then flips the switch. If any step fails it leaves
 the switch off rather than half-on.
 
-**The unit is the agent session, not the directory.** Several sessions routinely run in one repo on
+**The unit is the herdr pane — one window, one group.** Several panes routinely run in one repo on
 different tasks; keying on the directory would give them a single group and a single question slot
 between them, and deliver a phone reply to whichever pane ran a command last — the wrong agent acting
-on the human's instruction. Each session gets its own group, named after its task.
+on the human's instruction. Keying on the agent session instead would hand out a second group every
+time the human runs `/clear`, for work that visibly continued in the same window.
+
+A group is named after the task the pane is on, and renamed when that changes.
 
 Calling `ask` or `notify` from a session that was never bound exits 4 — relay stderr and have the human
 run `away on` there.

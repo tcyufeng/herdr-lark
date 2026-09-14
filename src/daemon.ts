@@ -185,6 +185,31 @@ export async function runDaemon(): Promise<void> {
     }
   };
 
+  /** The group's name, so the chat list says which task it belongs to. */
+  const groupName = (project: string, task: string | null): string =>
+    task ? `🤖 ${project} · ${task}` : `🤖 ${project}`;
+
+  /**
+   * Keep the group name in step with what the session is actually doing. After
+   * a `/clear` the agent picks up a different task and the old name becomes a
+   * lie — and the chat list is the only place the human tells several groups
+   * apart, so a stale name there is worse than no name.
+   */
+  const renameChat = async (b: Binding, task: string): Promise<void> => {
+    const name = groupName(b.label, task);
+    try {
+      await (channel.rawClient as unknown as {
+        im: { chat: { update(req: unknown): Promise<unknown> } };
+      }).im.chat.update({ path: { chat_id: b.chatId }, data: { name } });
+      bindings.touch(b.key, { task });
+      log('chat.renamed', { key: b.key, task });
+    } catch (err) {
+      log('chat.rename-failed', { key: b.key, err: String(err).slice(0, 160) });
+      // Record it anyway: retrying every 5 s on a permission error is noise.
+      bindings.touch(b.key, { task });
+    }
+  };
+
   const receipt = async (b: Binding, why: string): Promise<void> => {
     try {
       await channel.send(b.chatId, { card: receiptCard(b.label, why) });
@@ -209,12 +234,11 @@ export async function runDaemon(): Promise<void> {
 
   /** Deliver a free-standing phone message into the project's pane. */
   const inject = async (b: Binding, text: string): Promise<void> => {
-    // Resolve the pane from the session id every time: a pane can be moved or
-    // renumbered while the session inside it keeps running, and delivering to
-    // a stale pane id would hand the message to a different agent.
     const agents = await agentList();
-    let paneId = b.sessionId ? findPaneForSession(agents, b.sessionId) : null;
-    if (!paneId) paneId = b.paneId;
+    // The binding is keyed by pane, so that is where this group's messages go.
+    // The session id is the fallback for a binding made outside herdr.
+    let paneId = b.paneId;
+    if (!paneId && b.sessionId) paneId = findPaneForSession(agents, b.sessionId);
     if (!paneId) paneId = findPaneForProject(agents, b.root);
     if (!paneId) {
       await receipt(b, '这个项目还没有记录到 herdr 窗格，消息没处可送。');
@@ -359,14 +383,25 @@ export async function runDaemon(): Promise<void> {
 
   // ---- agent state pushes -------------------------------------------------
   const poll = async (): Promise<void> => {
-    const away = bindings.all().filter((b) => b.away && b.paneId);
-    if (!away.length) return;
+    const all = bindings.all();
+    if (!all.length) return;
     const agents = await agentList();
+
+    // Keep every group's name current, whether or not remote mode is on: the
+    // human reads the chat list even while sitting at the keyboard.
+    for (const b of all) {
+      const a =
+        agents.find((x) => x.pane_id === b.paneId) ??
+        (b.sessionId ? agents.find((x) => x.agent_session?.value === b.sessionId) : undefined);
+      const task = a?.terminal_title_stripped?.trim();
+      if (task && task !== b.task) await renameChat(b, task);
+    }
+
+    const away = all.filter((b) => b.away && b.paneId);
+    if (!away.length) return;
     for (const b of away) {
       if (pendingFor(b.key)) continue;
-      const a =
-        (b.sessionId ? agents.find((x) => x.agent_session?.value === b.sessionId) : undefined) ??
-        agents.find((x) => x.pane_id === b.paneId);
+      const a = agents.find((x) => x.pane_id === b.paneId);
       if (!a) continue;
       const prev = lastStatus.get(b.key);
       lastStatus.set(b.key, a.agent_status);
@@ -501,6 +536,29 @@ export async function runDaemon(): Promise<void> {
           // the chat history. The first session in the directory takes it; a
           // second one falls through and gets a group of its own, which is
           // exactly the separation this change is for.
+          // A binding written under an older key (by project, or by agent
+          // session before the pane became the key) but living in this same
+          // pane: take it over, keeping its group and its history.
+          const samePane = c.paneId
+            ? bindings.all().find((x) => x.paneId === c.paneId && x.key !== c.key)
+            : undefined;
+          if (samePane) {
+            bindings.remove(samePane.key);
+            const moved: Binding = {
+              ...samePane,
+              key: c.key,
+              sessionId: c.sessionId,
+              task: c.task,
+              label: c.project,
+              paneId: c.paneId,
+            };
+            bindings.set(moved);
+            refreshPolicy();
+            if (c.task && c.task !== samePane.task) void renameChat(moved, c.task);
+            log('bind.resumed', { from: samePane.key, to: c.key, chatId: moved.chatId });
+            return { ok: true, kind: 'bind', chatId: moved.chatId, created: false, name: moved.label };
+          }
+
           const legacy = bindings.get(`proj:${c.root}`);
           if (legacy) {
             bindings.remove(legacy.key);
@@ -563,7 +621,7 @@ export async function runDaemon(): Promise<void> {
           }
           // The group name carries the task, so several sessions in one repo
           // are told apart at a glance in the chat list.
-          const name = req.name?.trim() || (c.task ? `🤖 ${c.project} · ${c.task}` : `🤖 ${c.project}`);
+          const name = req.name?.trim() || groupName(c.project, c.task);
           try {
             const { chatId } = await channel.createChat({
               name,

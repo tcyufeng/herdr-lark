@@ -39,10 +39,13 @@ cd <your project> && herdr-lark away on
 
 One command gets everything ready: start the daemon → **create a Feishu group for this project** (or reuse the existing one) → flip the switch. Open Feishu and the group is there; every question from this project lands in it.
 
-**One session, one group** — not one directory. Several sessions routinely run in the same repo on
+**One window, one group** — not one directory. Several panes routinely run in the same repo on
 different tasks; keying on the directory would give them one group and one question slot between them,
-and deliver your reply to whichever pane ran a command last — the wrong agent. Group names carry the
-task, so you can tell them apart at a glance.
+and deliver your reply to whichever pane ran a command last — the wrong agent.
+
+A group is named `🤖 project · task`, taking the task from the terminal title the agent sets itself. It
+is renamed when the window moves on to something else (after a `/clear`, say), but a name you set by
+hand is left alone.
 
 ## Make "I'm heading out" work
 

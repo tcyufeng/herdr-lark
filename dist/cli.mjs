@@ -137286,6 +137286,18 @@ async function runDaemon() {
       log("ask.update-failed", { reqId: p.reqId, err: String(err) });
     }
   };
+  const groupName = (project, task) => task ? `\u{1F916} ${project} \xB7 ${task}` : `\u{1F916} ${project}`;
+  const renameChat = async (b, task) => {
+    const name = groupName(b.label, task);
+    try {
+      await channel.rawClient.im.chat.update({ path: { chat_id: b.chatId }, data: { name } });
+      bindings.touch(b.key, { task });
+      log("chat.renamed", { key: b.key, task });
+    } catch (err) {
+      log("chat.rename-failed", { key: b.key, err: String(err).slice(0, 160) });
+      bindings.touch(b.key, { task });
+    }
+  };
   const receipt = async (b, why) => {
     try {
       await channel.send(b.chatId, { card: receiptCard(b.label, why) });
@@ -137308,8 +137320,8 @@ async function runDaemon() {
   };
   const inject = async (b, text) => {
     const agents = await agentList();
-    let paneId = b.sessionId ? findPaneForSession(agents, b.sessionId) : null;
-    if (!paneId) paneId = b.paneId;
+    let paneId = b.paneId;
+    if (!paneId && b.sessionId) paneId = findPaneForSession(agents, b.sessionId);
     if (!paneId) paneId = findPaneForProject(agents, b.root);
     if (!paneId) {
       await receipt(b, "\u8FD9\u4E2A\u9879\u76EE\u8FD8\u6CA1\u6709\u8BB0\u5F55\u5230 herdr \u7A97\u683C\uFF0C\u6D88\u606F\u6CA1\u5904\u53EF\u9001\u3002");
@@ -137425,12 +137437,19 @@ ${list}`;
   await channel.connect();
   log("daemon.connected", { bindings: bindings.all().length, credSource: creds.source });
   const poll = async () => {
-    const away = bindings.all().filter((b) => b.away && b.paneId);
-    if (!away.length) return;
+    const all = bindings.all();
+    if (!all.length) return;
     const agents = await agentList();
+    for (const b of all) {
+      const a = agents.find((x) => x.pane_id === b.paneId) ?? (b.sessionId ? agents.find((x) => x.agent_session?.value === b.sessionId) : void 0);
+      const task = a?.terminal_title_stripped?.trim();
+      if (task && task !== b.task) await renameChat(b, task);
+    }
+    const away = all.filter((b) => b.away && b.paneId);
+    if (!away.length) return;
     for (const b of away) {
       if (pendingFor(b.key)) continue;
-      const a = (b.sessionId ? agents.find((x) => x.agent_session?.value === b.sessionId) : void 0) ?? agents.find((x) => x.pane_id === b.paneId);
+      const a = agents.find((x) => x.pane_id === b.paneId);
       if (!a) continue;
       const prev = lastStatus.get(b.key);
       lastStatus.set(b.key, a.agent_status);
@@ -137548,6 +137567,23 @@ ${list}`;
             bindings.touch(c.key, { paneId: c.paneId, label: c.project, task: c.task });
             return { ok: true, kind: "bind", chatId: existing.chatId, created: false, name: existing.label };
           }
+          const samePane = c.paneId ? bindings.all().find((x) => x.paneId === c.paneId && x.key !== c.key) : void 0;
+          if (samePane) {
+            bindings.remove(samePane.key);
+            const moved = {
+              ...samePane,
+              key: c.key,
+              sessionId: c.sessionId,
+              task: c.task,
+              label: c.project,
+              paneId: c.paneId
+            };
+            bindings.set(moved);
+            refreshPolicy();
+            if (c.task && c.task !== samePane.task) void renameChat(moved, c.task);
+            log("bind.resumed", { from: samePane.key, to: c.key, chatId: moved.chatId });
+            return { ok: true, kind: "bind", chatId: moved.chatId, created: false, name: moved.label };
+          }
           const legacy = bindings.get(`proj:${c.root}`);
           if (legacy) {
             bindings.remove(legacy.key);
@@ -137603,7 +137639,7 @@ ${list}`;
               message: "\u4E0D\u77E5\u9053\u8BE5\u628A\u8C01\u62C9\u8FDB\u65B0\u7FA4\uFF08\u6CA1\u6709\u8BB0\u5F55\u5E94\u7528 owner\uFF09\u3002\u7528 --chat <chat_id> \u7ED1\u5B9A\u4E00\u4E2A\u4F60\u81EA\u5DF1\u5EFA\u597D\u7684\u7FA4\u3002"
             };
           }
-          const name = req.name?.trim() || (c.task ? `\u{1F916} ${c.project} \xB7 ${c.task}` : `\u{1F916} ${c.project}`);
+          const name = req.name?.trim() || groupName(c.project, c.task);
           try {
             const { chatId } = await channel.createChat({
               name,
@@ -137892,7 +137928,7 @@ function caller() {
   const root = projectRoot();
   const project = projectLabel(root);
   const id = identifySession(root, project);
-  const key = id.sessionId ? `sess:${id.sessionId}` : id.paneId ? `pane:${id.paneId}` : `proj:${root}`;
+  const key = id.paneId ? `pane:${id.paneId}` : id.sessionId ? `sess:${id.sessionId}` : `proj:${root}`;
   return { key, sessionId: id.sessionId, root, project, task: id.title, paneId: id.paneId };
 }
 function finish(res, onOk) {
