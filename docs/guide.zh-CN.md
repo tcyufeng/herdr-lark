@@ -1,6 +1,6 @@
 # herdr-lark
 
-[English](./README.md) | **简体中文**
+[English](./guide.md) | **简体中文**
 
 把 **herdr 窗格里正在跑的** agent 会话接到飞书。
 
@@ -43,7 +43,7 @@ HERDR_LARK_APP_ID=cli_xxx HERDR_LARK_APP_SECRET=xxx herdr-lark setup
 
 ## 用
 
-日常你不用碰这些命令——把 [`examples/remote-mode-rule.md`](./examples/remote-mode-rule.md) 拷到 `~/.claude/rules/`，然后直接对 agent 说「我走了」「我回来了」就行。
+日常你不用碰这些命令——把 [`examples/remote-mode-rule.md`](../examples/remote-mode-rule.md) 拷到 `~/.claude/rules/`，然后直接对 agent 说「我走了」「我回来了」就行。
 
 ```bash
 herdr-lark ask <<'JSON'      # 推一张提问卡，阻塞等答复，答复到 stdout
@@ -65,7 +65,7 @@ herdr-lark send-file shot.png --caption "现在的版式"
 herdr-lark status
 ```
 
-字段含义、退出码、写卡片的规矩：[SKILL.md](./SKILL.md)。
+字段含义、退出码、写卡片的规矩：[SKILL.md](../SKILL.md)。
 
 ### 三种卡片
 
