@@ -16,13 +16,14 @@ When it hits something only you can decide, it pushes a card with buttons to you
 
 ## Install
 
-The skills.sh CLI copies files but does not build, so build once after installing:
+`dist/cli.mjs` ships in the repo as a single self-contained file — the Feishu SDK is bundled in, so there is nothing to install and nothing to build:
 
 ```bash
 npx skills add tcyufeng/herdr-lark      # or just git clone
-cd <where it landed> && npm install && npm run build
-ln -sf "$PWD/dist/cli.js" ~/.local/bin/herdr-lark
+ln -sf "$PWD/.agents/skills/herdr-lark/dist/cli.mjs" ~/.local/bin/herdr-lark
 ```
+
+Building from source (only needed if you change the code): `npm install && npm run build`.
 
 ## Set up
 

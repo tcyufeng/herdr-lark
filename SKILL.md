@@ -14,11 +14,11 @@ phone, blocks until they answer, and prints the answer verbatim on stdout. **Whe
 What makes it different from a chat bridge: the answer lands back in **the session that asked**, the one
 already running in a herdr pane with all of its context, rather than starting a new one.
 
-Every command below is `dist/cli.js` in this skill's directory. If it is not on your PATH yet, the human
-has to build it once — the skills CLI copies files but does not build:
+Every command below is `dist/cli.mjs` in this skill's directory — a single self-contained file, no
+`npm install` and no build step. If `herdr-lark` is not on the human's PATH yet:
 
 ```bash
-npm install && npm run build && ln -sf "$PWD/dist/cli.js" ~/.local/bin/herdr-lark
+ln -sf "$PWD/dist/cli.mjs" ~/.local/bin/herdr-lark
 ```
 
 ## Before anything works

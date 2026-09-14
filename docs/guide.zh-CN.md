@@ -16,13 +16,14 @@
 
 ## 装
 
-skills.sh 只拷文件、不会替你构建，所以装完要自己 build 一次：
+仓库里带的 `dist/cli.mjs` 是**自包含单文件**——飞书 SDK 已经打进去了，不用装依赖也不用构建：
 
 ```bash
 npx skills add tcyufeng/herdr-lark      # 或者 git clone
-cd <装到的目录> && npm install && npm run build
-ln -sf "$PWD/dist/cli.js" ~/.local/bin/herdr-lark
+ln -sf "$PWD/.agents/skills/herdr-lark/dist/cli.mjs" ~/.local/bin/herdr-lark
 ```
+
+要改代码才需要自己构建：`npm install && npm run build`。
 
 ## 配
 

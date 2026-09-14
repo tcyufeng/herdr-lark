@@ -17,11 +17,10 @@ npx skills add tcyufeng/herdr-lark
 
 ## Quick start
 
-**1. Build it.** The skills CLI copies files but does not build, so do it once:
+**1. Put it on your PATH.** The shipped `dist/cli.mjs` is a single self-contained file — no `npm install`, no build step:
 
 ```bash
-cd .agents/skills/herdr-lark && npm install && npm run build
-ln -sf "$PWD/dist/cli.js" ~/.local/bin/herdr-lark
+ln -sf "$PWD/.agents/skills/herdr-lark/dist/cli.mjs" ~/.local/bin/herdr-lark
 ```
 
 **2. Scan a QR code to create the app.**

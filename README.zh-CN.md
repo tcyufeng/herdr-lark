@@ -17,11 +17,10 @@ npx skills add tcyufeng/herdr-lark
 
 ## 三步跑起来
 
-**1. 构建。** skills CLI 只拷文件、不构建，所以要自己来一次：
+**1. 挂到 PATH 上。** 仓库里带的 `dist/cli.mjs` 是**自包含单文件**——不用 `npm install`，也不用构建：
 
 ```bash
-cd .agents/skills/herdr-lark && npm install && npm run build
-ln -sf "$PWD/dist/cli.js" ~/.local/bin/herdr-lark
+ln -sf "$PWD/.agents/skills/herdr-lark/dist/cli.mjs" ~/.local/bin/herdr-lark
 ```
 
 **2. 扫码建应用。**
