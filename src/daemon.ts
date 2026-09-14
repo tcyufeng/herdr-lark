@@ -7,8 +7,8 @@ import { createLarkChannel, type CardActionEvent, type LarkChannel, type Normali
 import { BindingStore, type Binding } from './bindings.js';
 import { askCard, notifyCard, receiptCard, sayCard, statusCard } from './cards.js';
 import { resolveCreds } from './creds.js';
-import { agentList, findPaneForProject, promptPane } from './herdr.js';
-import { serve, type Request, type Response } from './ipc.js';
+import { agentList, findPaneForProject, findPaneForSession, promptPane } from './herdr.js';
+import { serve, type Caller, type Request, type Response } from './ipc.js';
 import { ensureHomeDir, homeDir, logPath, pidPath, sockPath } from './paths.js';
 import { validateAsk, validateNotify, ValidationError, type AskPayload } from './validate.js';
 
@@ -78,6 +78,7 @@ function resolveSendable(
 
 interface Pending {
   reqId: string;
+  key: string;
   root: string;
   chatId: string;
   messageId: string;
@@ -130,8 +131,9 @@ export async function runDaemon(): Promise<void> {
     channel.updatePolicy({ groupAllowlist: bindings.chatIds() });
   };
 
-  const pendingFor = (root: string): Pending | undefined => {
-    for (const p of pendings.values()) if (p.root === root && !p.done) return p;
+  /** One question at a time per *session*, not per directory. */
+  const pendingFor = (key: string): Pending | undefined => {
+    for (const p of pendings.values()) if (p.key === key && !p.done) return p;
     return undefined;
   };
 
@@ -187,7 +189,7 @@ export async function runDaemon(): Promise<void> {
     try {
       await channel.send(b.chatId, { card: receiptCard(b.label, why) });
     } catch (err) {
-      log('receipt.failed', { root: b.root, err: String(err) });
+      log('receipt.failed', { key: b.key, err: String(err) });
     }
   };
 
@@ -207,14 +209,19 @@ export async function runDaemon(): Promise<void> {
 
   /** Deliver a free-standing phone message into the project's pane. */
   const inject = async (b: Binding, text: string): Promise<void> => {
-    let paneId = b.paneId;
-    if (!paneId) paneId = findPaneForProject(await agentList(), b.root);
+    // Resolve the pane from the session id every time: a pane can be moved or
+    // renumbered while the session inside it keeps running, and delivering to
+    // a stale pane id would hand the message to a different agent.
+    const agents = await agentList();
+    let paneId = b.sessionId ? findPaneForSession(agents, b.sessionId) : null;
+    if (!paneId) paneId = b.paneId;
+    if (!paneId) paneId = findPaneForProject(agents, b.root);
     if (!paneId) {
       await receipt(b, '这个项目还没有记录到 herdr 窗格，消息没处可送。');
       return;
     }
     const outcome = await promptPane(paneId, `${INJECT_PREFIX}${text}`);
-    log('inject', { root: b.root, paneId, ok: outcome.ok, code: outcome.code });
+    log('inject', { key: b.key, paneId, ok: outcome.ok, code: outcome.code });
     if (!outcome.ok) await receipt(b, explainPromptFailure(outcome.code, outcome.message));
   };
 
@@ -356,13 +363,15 @@ export async function runDaemon(): Promise<void> {
     if (!away.length) return;
     const agents = await agentList();
     for (const b of away) {
-      if (pendingFor(b.root)) continue;
-      const a = agents.find((x) => x.pane_id === b.paneId);
+      if (pendingFor(b.key)) continue;
+      const a =
+        (b.sessionId ? agents.find((x) => x.agent_session?.value === b.sessionId) : undefined) ??
+        agents.find((x) => x.pane_id === b.paneId);
       if (!a) continue;
-      const prev = lastStatus.get(b.root);
-      lastStatus.set(b.root, a.agent_status);
+      const prev = lastStatus.get(b.key);
+      lastStatus.set(b.key, a.agent_status);
       const now = Date.now();
-      if (a.agent_status === 'working' && prev !== 'working') workingSince.set(b.root, now);
+      if (a.agent_status === 'working' && prev !== 'working') workingSince.set(b.key, now);
       if (!prev || prev === a.agent_status) continue;
 
       let kind: 'blocked' | 'idle' | null = null;
@@ -375,21 +384,21 @@ export async function runDaemon(): Promise<void> {
         // pure noise while the human is at the keyboard. Opt-in, and only
         // when the turn actually ran long enough to be worth interrupting for.
         if (!b.notifyIdle) continue;
-        ranMs = now - (workingSince.get(b.root) ?? now);
+        ranMs = now - (workingSince.get(b.key) ?? now);
         if (ranMs < b.idleMinMinutes * 60_000) continue;
         kind = 'idle';
       }
       if (!kind) continue;
-      if (now - (lastStatusPush.get(b.root) ?? 0) < STATUS_COOLDOWN_MS) continue;
-      lastStatusPush.set(b.root, now);
+      if (now - (lastStatusPush.get(b.key) ?? 0) < STATUS_COOLDOWN_MS) continue;
+      lastStatusPush.set(b.key, now);
       const ranFor = ranMs ? `\n跑了 ${Math.round(ranMs / 60_000)} 分钟` : '';
       const detail =
         (a.terminal_title_stripped ? `**${a.terminal_title_stripped}**\n` : '') + `窗格 ${a.pane_id}${ranFor}`;
       try {
         await channel.send(b.chatId, { card: statusCard(b.label, kind, detail) });
-        log('status.pushed', { root: b.root, kind });
+        log('status.pushed', { key: b.key, kind });
       } catch (err) {
-        log('status.failed', { root: b.root, err: String(err) });
+        log('status.failed', { key: b.key, err: String(err) });
       }
     }
   };
@@ -449,8 +458,10 @@ export async function runDaemon(): Promise<void> {
             ok: true,
             kind: 'list',
             bindings: bindings.all().map((b) => ({
+              key: b.key,
               root: b.root,
               label: b.label,
+              task: b.task,
               chatId: b.chatId,
               paneId: b.paneId,
               away: b.away,
@@ -460,13 +471,17 @@ export async function runDaemon(): Promise<void> {
           };
 
         case 'bind': {
-          const existing = bindings.get(req.root);
+          const c = req.caller;
+          const existing = bindings.get(c.key);
           if (req.chatId) {
             const b: Binding = {
-              root: req.root,
-              label: req.label,
+              key: c.key,
+              sessionId: c.sessionId,
+              root: c.root,
+              task: c.task,
+              label: c.project,
               chatId: req.chatId,
-              paneId: req.paneId ?? existing?.paneId ?? null,
+              paneId: c.paneId ?? existing?.paneId ?? null,
               away: existing?.away ?? false,
               notifyIdle: existing?.notifyIdle ?? false,
               idleMinMinutes: existing?.idleMinMinutes ?? 10,
@@ -474,18 +489,40 @@ export async function runDaemon(): Promise<void> {
             };
             bindings.set(b);
             refreshPolicy();
-            log('bind', { root: req.root, chatId: req.chatId, created: false });
-            return { ok: true, kind: 'bind', chatId: req.chatId, created: false, name: req.label };
+            log('bind', { key: c.key, chatId: req.chatId, created: false });
+            return { ok: true, kind: 'bind', chatId: req.chatId, created: false, name: c.project };
           }
           if (existing) {
-            bindings.touch(req.root, { paneId: req.paneId, label: req.label });
+            bindings.touch(c.key, { paneId: c.paneId, label: c.project, task: c.task });
             return { ok: true, kind: 'bind', chatId: existing.chatId, created: false, name: existing.label };
           }
+          // Adopt a binding written before the key was the session: re-key it
+          // to this session and keep its group, so upgrading does not orphan
+          // the chat history. The first session in the directory takes it; a
+          // second one falls through and gets a group of its own, which is
+          // exactly the separation this change is for.
+          const legacy = bindings.get(`proj:${c.root}`);
+          if (legacy) {
+            bindings.remove(legacy.key);
+            const adopted: Binding = {
+              ...legacy,
+              key: c.key,
+              sessionId: c.sessionId,
+              task: c.task,
+              label: c.project,
+              paneId: c.paneId ?? legacy.paneId,
+            };
+            bindings.set(adopted);
+            refreshPolicy();
+            log('bind.adopted', { from: legacy.key, to: c.key, chatId: adopted.chatId });
+            return { ok: true, kind: 'bind', chatId: adopted.chatId, created: false, name: adopted.label };
+          }
+
           // No local binding — but the group may already exist from an earlier
           // install whose bindings.json is gone. Creating a second group for
           // the same project would split the conversation in two, so look for
-          // one the bot made for exactly this project root before creating.
-          const marker = `herdr-lark · ${req.root}`;
+          // one the bot made for exactly this session before creating.
+          const marker = `herdr-lark · ${c.key}`;
           try {
             for (const summary of await channel.listChats()) {
               let info;
@@ -496,10 +533,13 @@ export async function runDaemon(): Promise<void> {
               }
               if (info.description !== marker) continue;
               const b: Binding = {
-                root: req.root,
-                label: req.label,
+                key: c.key,
+                sessionId: c.sessionId,
+                root: c.root,
+                task: c.task,
+                label: c.project,
                 chatId: summary.id,
-                paneId: req.paneId,
+                paneId: c.paneId,
                 away: false,
                 notifyIdle: false,
                 idleMinMinutes: 10,
@@ -507,11 +547,11 @@ export async function runDaemon(): Promise<void> {
               };
               bindings.set(b);
               refreshPolicy();
-              log('bind.reused', { root: req.root, chatId: summary.id });
+              log('bind.reused', { key: c.key, chatId: summary.id });
               return { ok: true, kind: 'bind', chatId: summary.id, created: false, name: summary.name };
             }
           } catch (err) {
-            log('bind.scan-failed', { root: req.root, err: String(err) });
+            log('bind.scan-failed', { key: c.key, err: String(err) });
           }
           const owner = creds.ownerOpenId;
           if (!owner) {
@@ -521,20 +561,25 @@ export async function runDaemon(): Promise<void> {
               message: '不知道该把谁拉进新群（没有记录应用 owner）。用 --chat <chat_id> 绑定一个你自己建好的群。',
             };
           }
-          const name = req.name?.trim() || `🤖 ${req.label}`;
+          // The group name carries the task, so several sessions in one repo
+          // are told apart at a glance in the chat list.
+          const name = req.name?.trim() || (c.task ? `🤖 ${c.project} · ${c.task}` : `🤖 ${c.project}`);
           try {
             const { chatId } = await channel.createChat({
               name,
-              description: `herdr-lark · ${req.root}`,
+              description: marker,
               inviteUserIds: [owner],
               userIdType: 'open_id',
             });
             // `existing` is undefined here — the bound case returned above.
             const b: Binding = {
-              root: req.root,
-              label: req.label,
+              key: c.key,
+              sessionId: c.sessionId,
+              root: c.root,
+              task: c.task,
+              label: c.project,
               chatId,
-              paneId: req.paneId,
+              paneId: c.paneId,
               away: false,
               notifyIdle: false,
               idleMinMinutes: 10,
@@ -542,7 +587,7 @@ export async function runDaemon(): Promise<void> {
             };
             bindings.set(b);
             refreshPolicy();
-            log('bind', { root: req.root, chatId, created: true });
+            log('bind', { key: c.key, chatId, created: true });
             return { ok: true, kind: 'bind', chatId, created: true, name };
           } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
@@ -557,33 +602,44 @@ export async function runDaemon(): Promise<void> {
         }
 
         case 'unbind': {
-          const b = bindings.get(req.root);
-          if (!b) return { ok: false, code: 1, message: '这个项目本来就没绑定' };
-          const p = pendingFor(req.root);
+          const b = bindings.get(req.caller.key);
+          if (!b) return { ok: false, code: 1, message: '这个会话本来就没绑定' };
+          const p = pendingFor(req.caller.key);
           if (p) return { ok: false, code: 4, message: '还有一个问题挂在手机上，先回答或等它超时' };
-          bindings.remove(req.root);
+          bindings.remove(req.caller.key);
           refreshPolicy();
-          log('unbind', { root: req.root });
+          log('unbind', { key: req.caller.key });
           return { ok: true, kind: 'ack' };
         }
 
         case 'setAway': {
-          const b = bindings.touch(req.root, {
+          // `--all` exists because a person who is back is back for every
+          // session, not just the one they happen to be typing in.
+          if (req.all) {
+            const n = req.away ? bindings.allAwayOn() : bindings.allAwayOff();
+            lastStatus.clear();
+            workingSince.clear();
+            log('away.all', { away: req.away, count: n });
+            return { ok: true, kind: 'ack', count: n };
+          }
+          const b = bindings.touch(req.caller.key, {
             away: req.away,
-            paneId: req.paneId,
+            paneId: req.caller.paneId,
+            label: req.caller.project,
+            task: req.caller.task,
             notifyIdle: req.notifyIdle,
             idleMinMinutes: req.idleMinMinutes,
           });
-          if (!b) return { ok: false, code: 4, message: '这个项目还没 bind，先跑 herdr-lark bind' };
-          lastStatus.delete(req.root);
-          workingSince.delete(req.root);
-          log('away', { root: req.root, away: req.away, notifyIdle: b.notifyIdle });
+          if (!b) return { ok: false, code: 4, message: '这个会话还没绑定，先跑 herdr-lark away on' };
+          lastStatus.delete(req.caller.key);
+          workingSince.delete(req.caller.key);
+          log('away', { key: req.caller.key, away: req.away, notifyIdle: b.notifyIdle });
           return { ok: true, kind: 'ack' };
         }
 
         case 'notify': {
-          const b = bindings.touch(req.root, { paneId: req.paneId, label: req.label });
-          if (!b) return { ok: false, code: 4, message: '这个项目还没 bind，先跑 herdr-lark bind' };
+          const b = bindings.touch(req.caller.key, { paneId: req.caller.paneId, label: req.caller.project, task: req.caller.task });
+          if (!b) return { ok: false, code: 4, message: '这个会话还没绑定，先跑 herdr-lark away on' };
           let payload;
           try {
             payload = validateNotify(req.payload);
@@ -593,7 +649,7 @@ export async function runDaemon(): Promise<void> {
           }
           try {
             await channel.send(b.chatId, { card: notifyCard(payload, b.label) });
-            log('notify.sent', { root: b.root });
+            log('notify.sent', { key: b.key });
             return { ok: true, kind: 'ack' };
           } catch (err) {
             return { ok: false, code: 3, message: `发送失败：${err instanceof Error ? err.message : String(err)}` };
@@ -601,13 +657,13 @@ export async function runDaemon(): Promise<void> {
         }
 
         case 'say': {
-          const b = bindings.touch(req.root, { paneId: req.paneId, label: req.label });
+          const b = bindings.touch(req.caller.key, { paneId: req.caller.paneId, label: req.caller.project, task: req.caller.task });
           if (!b) return { ok: false, code: 4, message: '这个项目还没 bind，先跑 herdr-lark away on' };
           const text = req.text.trim();
           if (!text) return { ok: false, code: 1, message: '没有内容可发' };
           try {
             await channel.send(b.chatId, { card: sayCard(text, b.label, req.title) });
-            log('say.sent', { root: b.root, chars: text.length });
+            log('say.sent', { key: b.key, chars: text.length });
             return { ok: true, kind: 'ack' };
           } catch (err) {
             return { ok: false, code: 3, message: `发送失败：${err instanceof Error ? err.message : String(err)}` };
@@ -615,8 +671,8 @@ export async function runDaemon(): Promise<void> {
         }
 
         case 'sendFile': {
-          const b = bindings.touch(req.root, { paneId: req.paneId, label: req.label });
-          if (!b) return { ok: false, code: 4, message: '这个项目还没 bind，先跑 herdr-lark bind' };
+          const b = bindings.touch(req.caller.key, { paneId: req.caller.paneId, label: req.caller.project, task: req.caller.task });
+          if (!b) return { ok: false, code: 4, message: '这个会话还没绑定，先跑 herdr-lark away on' };
           const checked = resolveSendable(req.path, b.root);
           if ('error' in checked) return { ok: false, code: 1, message: checked.error };
           const { real, bytes } = checked;
@@ -632,7 +688,7 @@ export async function runDaemon(): Promise<void> {
               b.chatId,
               isImage ? { image: { source: bytes } } : { file: { source: bytes, fileName } },
             );
-            log('file.sent', { root: b.root, isImage, size: bytes.length });
+            log('file.sent', { key: b.key, isImage, size: bytes.length });
             return { ok: true, kind: 'ack' };
           } catch (err) {
             return { ok: false, code: 3, message: `发送失败：${err instanceof Error ? err.message : String(err)}` };
@@ -640,9 +696,9 @@ export async function runDaemon(): Promise<void> {
         }
 
         case 'ask': {
-          const b = bindings.touch(req.root, { paneId: req.paneId, label: req.label });
-          if (!b) return { ok: false, code: 4, message: '这个项目还没 bind，先跑 herdr-lark bind' };
-          if (pendingFor(req.root))
+          const b = bindings.touch(req.caller.key, { paneId: req.caller.paneId, label: req.caller.project, task: req.caller.task });
+          if (!b) return { ok: false, code: 4, message: '这个会话还没绑定，先跑 herdr-lark away on' };
+          if (pendingFor(req.caller.key))
             return { ok: false, code: 4, message: '这个项目已经有一个问题挂在手机上了；一次只能问一个' };
           let payload: AskPayload;
           try {
@@ -661,11 +717,12 @@ export async function runDaemon(): Promise<void> {
           } catch (err) {
             return { ok: false, code: 3, message: `发送失败：${err instanceof Error ? err.message : String(err)}` };
           }
-          log('ask.sent', { reqId, root: b.root, options: payload.options.length });
+          log('ask.sent', { reqId, key: b.key, options: payload.options.length });
 
           return await new Promise<Response>((resolve) => {
             const p: Pending = {
               reqId,
+              key: b.key,
               root: b.root,
               chatId: b.chatId,
               messageId,

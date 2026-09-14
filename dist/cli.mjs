@@ -24214,7 +24214,7 @@ var require_aspromise = __commonJS({
   "node_modules/@protobufjs/aspromise/index.js"(exports, module) {
     "use strict";
     module.exports = asPromise;
-    function asPromise(fn, ctx2) {
+    function asPromise(fn, ctx) {
       var params = new Array(arguments.length - 1), offset = 0, index = 2, pending = true;
       while (index < arguments.length)
         params[offset++] = arguments[index++];
@@ -24233,7 +24233,7 @@ var require_aspromise = __commonJS({
           }
         };
         try {
-          fn.apply(ctx2 || null, params);
+          fn.apply(ctx || null, params);
         } catch (err) {
           if (pending) {
             pending = false;
@@ -24353,10 +24353,10 @@ var require_eventemitter = __commonJS({
     function EventEmitter() {
       this._listeners = /* @__PURE__ */ Object.create(null);
     }
-    EventEmitter.prototype.on = function on(evt, fn, ctx2) {
+    EventEmitter.prototype.on = function on(evt, fn, ctx) {
       (this._listeners[evt] || (this._listeners[evt] = [])).push({
         fn,
-        ctx: ctx2 || this
+        ctx: ctx || this
       });
       return this;
     };
@@ -120578,8 +120578,8 @@ var require_lib2 = __commonJS({
       const value = yield dispatcher.invoke(data);
       res.json(value);
     });
-    var adaptKoa = (path3, dispatcher, options) => (ctx2, next) => __awaiter(void 0, void 0, void 0, function* () {
-      const { originalUrl, req, request: request2 } = ctx2;
+    var adaptKoa = (path3, dispatcher, options) => (ctx, next) => __awaiter(void 0, void 0, void 0, function* () {
+      const { originalUrl, req, request: request2 } = ctx;
       if (originalUrl === path3) {
         const reqData = yield (() => __awaiter(void 0, void 0, void 0, function* () {
           if (request2.body) {
@@ -120601,18 +120601,18 @@ var require_lib2 = __commonJS({
             encryptKey: dispatcher.encryptKey
           });
           if (isChallenge) {
-            ctx2.body = challenge;
+            ctx.body = challenge;
             yield next();
             return;
           }
         }
         const value = yield dispatcher.invoke(data);
-        ctx2.body = JSON.stringify(value);
+        ctx.body = JSON.stringify(value);
       }
       yield next();
     });
-    var adaptKoaRouter = (dispatcher, options) => (ctx2, next) => __awaiter(void 0, void 0, void 0, function* () {
-      const { req, request: request2 } = ctx2;
+    var adaptKoaRouter = (dispatcher, options) => (ctx, next) => __awaiter(void 0, void 0, void 0, function* () {
+      const { req, request: request2 } = ctx;
       const reqData = yield (() => __awaiter(void 0, void 0, void 0, function* () {
         if (request2.body) {
           return request2.body;
@@ -120633,13 +120633,13 @@ var require_lib2 = __commonJS({
           encryptKey: dispatcher.encryptKey
         });
         if (isChallenge) {
-          ctx2.body = challenge;
+          ctx.body = challenge;
           yield next();
           return;
         }
       }
       const value = yield dispatcher.invoke(data);
-      ctx2.body = JSON.stringify(value);
+      ctx.body = JSON.stringify(value);
       yield next();
     });
     var defaultCard = (variables) => {
@@ -122242,10 +122242,10 @@ var require_lib2 = __commonJS({
         request_user_info: "open_id"
       });
     }
-    function startPolling(ctx2) {
+    function startPolling(ctx) {
       return new Promise((resolve2, reject) => {
         var _a, _b;
-        let { baseUrl, interval } = ctx2;
+        let { baseUrl, interval } = ctx;
         let domainSwitched = false;
         let pollTimer = null;
         let expireTimer = null;
@@ -122260,7 +122260,7 @@ var require_lib2 = __commonJS({
             clearTimeout(expireTimer);
             expireTimer = null;
           }
-          (_a2 = ctx2.signal) === null || _a2 === void 0 ? void 0 : _a2.removeEventListener("abort", onAbort);
+          (_a2 = ctx.signal) === null || _a2 === void 0 ? void 0 : _a2.removeEventListener("abort", onAbort);
         };
         const succeed = (result) => {
           if (settled) {
@@ -122287,13 +122287,13 @@ var require_lib2 = __commonJS({
         const onAbort = () => {
           fail(createError("abort", "Registration was aborted"));
         };
-        if ((_a = ctx2.signal) === null || _a === void 0 ? void 0 : _a.aborted) {
+        if ((_a = ctx.signal) === null || _a === void 0 ? void 0 : _a.aborted) {
           return fail(createError("abort", "Registration was aborted"));
         }
-        (_b = ctx2.signal) === null || _b === void 0 ? void 0 : _b.addEventListener("abort", onAbort, { once: true });
+        (_b = ctx.signal) === null || _b === void 0 ? void 0 : _b.addEventListener("abort", onAbort, { once: true });
         expireTimer = setTimeout(() => {
           fail(createError("expired_token", "Polling timed out"));
-        }, ctx2.expireIn);
+        }, ctx.expireIn);
         const poll = () => __awaiter(this, void 0, void 0, function* () {
           var _c, _d, _e, _f, _g, _h;
           if (settled) {
@@ -122302,15 +122302,15 @@ var require_lib2 = __commonJS({
           try {
             const pollRes = yield requestRegistration(baseUrl, {
               action: "poll",
-              device_code: ctx2.deviceCode
+              device_code: ctx.deviceCode
             });
             if (settled) {
               return;
             }
             if (((_c = pollRes.user_info) === null || _c === void 0 ? void 0 : _c.tenant_brand) === "lark" && !domainSwitched) {
-              baseUrl = ctx2.larkBaseUrl;
+              baseUrl = ctx.larkBaseUrl;
               domainSwitched = true;
-              (_d = ctx2.onStatusChange) === null || _d === void 0 ? void 0 : _d.call(ctx2, { status: "domain_switched" });
+              (_d = ctx.onStatusChange) === null || _d === void 0 ? void 0 : _d.call(ctx, { status: "domain_switched" });
               poll();
               return;
             }
@@ -122324,11 +122324,11 @@ var require_lib2 = __commonJS({
             }
             switch (pollRes.error) {
               case "authorization_pending":
-                (_e = ctx2.onStatusChange) === null || _e === void 0 ? void 0 : _e.call(ctx2, { status: "polling" });
+                (_e = ctx.onStatusChange) === null || _e === void 0 ? void 0 : _e.call(ctx, { status: "polling" });
                 break;
               case "slow_down":
                 interval += 5e3;
-                (_f = ctx2.onStatusChange) === null || _f === void 0 ? void 0 : _f.call(ctx2, { status: "slow_down", interval: interval / 1e3 });
+                (_f = ctx.onStatusChange) === null || _f === void 0 ? void 0 : _f.call(ctx, { status: "slow_down", interval: interval / 1e3 });
                 break;
               case "access_denied":
               case "expired_token":
@@ -124338,12 +124338,12 @@ ${block}
       }
       return { mentions, mentionsByOpenId, mentionList, mentionAll, mentionedBot };
     }
-    function resolveMentions2(content, ctx2) {
-      if (!content || ctx2.mentions.size === 0)
+    function resolveMentions2(content, ctx) {
+      if (!content || ctx.mentions.size === 0)
         return content;
       let out = content;
-      for (const [key, info] of ctx2.mentions) {
-        if (info.isBot && ctx2.stripBotMentions) {
+      for (const [key, info] of ctx.mentions) {
+        if (info.isBot && ctx.stripBotMentions) {
           const re = new RegExp(`\\s?${escapeRegex2(key)}\\s?`, "g");
           out = out.replace(re, " ");
           continue;
@@ -124615,9 +124615,9 @@ ${formatCalendarInner2(raw)}
       return { content: `<location${nameAttr}${coordsAttr}/>`, resources: [] };
     });
     var MAX_ITEMS2 = 50;
-    var convertMergeForward2 = (_raw, ctx2) => __awaiter(void 0, void 0, void 0, function* () {
+    var convertMergeForward2 = (_raw, ctx) => __awaiter(void 0, void 0, void 0, function* () {
       var _a;
-      const { messageId, fetchSubMessages, dispatch } = ctx2;
+      const { messageId, fetchSubMessages, dispatch } = ctx;
       if (!fetchSubMessages || !dispatch) {
         return { content: "<forwarded_messages/>", resources: [] };
       }
@@ -124632,7 +124632,7 @@ ${formatCalendarInner2(raw)}
       }
       const capped = items.slice(0, MAX_ITEMS2);
       const truncated = items.length > MAX_ITEMS2;
-      if (ctx2.batchResolveNames) {
+      if (ctx.batchResolveNames) {
         const senderIds = /* @__PURE__ */ new Set();
         for (const it of capped) {
           const sid = (_a = it.sender) === null || _a === void 0 ? void 0 : _a.id;
@@ -124641,13 +124641,13 @@ ${formatCalendarInner2(raw)}
         }
         if (senderIds.size > 0) {
           try {
-            yield ctx2.batchResolveNames([...senderIds]);
+            yield ctx.batchResolveNames([...senderIds]);
           } catch (_c) {
           }
         }
       }
       const childrenMap = buildChildrenMap2(capped, messageId);
-      const content = yield formatSubTree2(messageId, childrenMap, ctx2, truncated);
+      const content = yield formatSubTree2(messageId, childrenMap, ctx, truncated);
       return { content, resources: [] };
     });
     function buildChildrenMap2(items, rootId) {
@@ -124674,7 +124674,7 @@ ${formatCalendarInner2(raw)}
       }
       return map;
     }
-    function formatSubTree2(parentId, map, ctx2, truncated = false) {
+    function formatSubTree2(parentId, map, ctx, truncated = false) {
       return __awaiter(this, void 0, void 0, function* () {
         const children = map.get(parentId);
         if (!children || children.length === 0)
@@ -124682,7 +124682,7 @@ ${formatCalendarInner2(raw)}
         const parts = [];
         for (const item of children) {
           try {
-            const sub = yield renderItem2(item, map, ctx2);
+            const sub = yield renderItem2(item, map, ctx);
             if (sub)
               parts.push(sub);
           } catch (_a) {
@@ -124697,24 +124697,24 @@ ${body}${footer}
 </forwarded_messages>`;
       });
     }
-    function renderItem2(item, map, ctx2) {
+    function renderItem2(item, map, ctx) {
       var _a, _b, _c, _d, _e, _f, _g, _h;
       return __awaiter(this, void 0, void 0, function* () {
         const msgType = (_a = item.msg_type) !== null && _a !== void 0 ? _a : "text";
         const senderId = (_c = (_b = item.sender) === null || _b === void 0 ? void 0 : _b.id) !== null && _c !== void 0 ? _c : "unknown";
         const createMs = parseInt(String((_d = item.create_time) !== null && _d !== void 0 ? _d : "0"), 10);
         const timestamp = createMs > 0 ? formatRFC3339Beijing2(createMs) : "unknown";
-        const displayName = (_f = (_e = ctx2.resolveUserName) === null || _e === void 0 ? void 0 : _e.call(ctx2, senderId)) !== null && _f !== void 0 ? _f : senderId;
+        const displayName = (_f = (_e = ctx.resolveUserName) === null || _e === void 0 ? void 0 : _e.call(ctx, senderId)) !== null && _f !== void 0 ? _f : senderId;
         let content;
         if (msgType === "merge_forward") {
           const nestedId = item.message_id;
-          content = nestedId ? yield formatSubTree2(nestedId, map, ctx2) : "<forwarded_messages/>";
+          content = nestedId ? yield formatSubTree2(nestedId, map, ctx) : "<forwarded_messages/>";
         } else {
           const rawContent = (_h = (_g = item.body) === null || _g === void 0 ? void 0 : _g.content) !== null && _h !== void 0 ? _h : "{}";
-          if (!ctx2.dispatch) {
+          if (!ctx.dispatch) {
             content = rawContent;
           } else {
-            const r = yield ctx2.dispatch(rawContent, msgType, ctx2);
+            const r = yield ctx.dispatch(rawContent, msgType, ctx);
             content = r.content;
           }
         }
@@ -124723,7 +124723,7 @@ ${body}${footer}
 ${indented}`;
       });
     }
-    var convertPost2 = (raw, ctx2) => __awaiter(void 0, void 0, void 0, function* () {
+    var convertPost2 = (raw, ctx) => __awaiter(void 0, void 0, void 0, function* () {
       var _a;
       const rawParsed = safeParse2(raw);
       if (rawParsed == null || typeof rawParsed !== "object") {
@@ -124743,14 +124743,14 @@ ${indented}`;
           continue;
         let line = "";
         for (const el of paragraph) {
-          line += renderElement2(el, ctx2, resources);
+          line += renderElement2(el, ctx, resources);
         }
         lines.push(line);
       }
       const content = lines.join("\n").trim() || "[rich text message]";
       return { content, resources };
     });
-    function renderElement2(el, ctx2, resources) {
+    function renderElement2(el, ctx, resources) {
       var _a, _b, _c, _d, _e, _f, _g;
       switch (el.tag) {
         case "text":
@@ -124763,7 +124763,7 @@ ${indented}`;
           const userId = (_d = el.user_id) !== null && _d !== void 0 ? _d : "";
           if (userId === "all" || userId === "all_members")
             return "@all";
-          const info = ctx2.mentionsByOpenId.get(userId);
+          const info = ctx.mentionsByOpenId.get(userId);
           if (info)
             return info.key;
           return el.user_name ? `@${el.user_name}` : `@${userId}`;
@@ -124963,12 +124963,12 @@ ${lines.join("\n")}
       ["hongbao", convertHongbao2],
       ["video_chat", convertVideoChat2]
     ]);
-    function dispatchConvert2(raw, msgType, ctx2) {
+    function dispatchConvert2(raw, msgType, ctx) {
       var _a;
       return __awaiter(this, void 0, void 0, function* () {
         const fn = (_a = converters2.get(msgType)) !== null && _a !== void 0 ? _a : convertUnknown2;
         try {
-          return yield fn(raw, ctx2);
+          return yield fn(raw, ctx);
         } catch (_b) {
           return convertUnknown2(raw);
         }
@@ -125070,7 +125070,7 @@ ${lines.join("\n")}
         const botOpenId = (_a = opts.botIdentity) === null || _a === void 0 ? void 0 : _a.openId;
         const { mentions, mentionsByOpenId, mentionList, mentionAll: mentionAllFromRaw, mentionedBot } = extractMentions2(msg.mentions, botOpenId);
         const mentionAll = mentionAllFromRaw || detectMentionAllInContent2(msg.content);
-        const ctx2 = {
+        const ctx = {
           messageId: msg.message_id,
           botOpenId,
           mentions,
@@ -125081,8 +125081,8 @@ ${lines.join("\n")}
           batchResolveNames: opts.batchResolveNames,
           dispatch: dispatchConvert2
         };
-        const { content: rawContent, resources } = yield dispatchConvert2(msg.content, msg.message_type, ctx2);
-        const content = resolveMentions2(rawContent, ctx2);
+        const { content: rawContent, resources } = yield dispatchConvert2(msg.content, msg.message_type, ctx);
+        const content = resolveMentions2(rawContent, ctx);
         const senderOpenId = event.sender.sender_id.open_id;
         const senderFallbackId = (_d = (_c = event.sender.sender_id.user_id) !== null && _c !== void 0 ? _c : event.sender.sender_id.union_id) !== null && _d !== void 0 ? _d : "";
         const senderId = senderOpenId !== null && senderOpenId !== void 0 ? senderOpenId : senderFallbackId;
@@ -126292,7 +126292,7 @@ function toRawActivity(carrier) {
     eventId: asString(carrier.event_id)
   };
 }
-function normalizeActivity(activity, ctx2) {
+function normalizeActivity(activity, ctx) {
   const name = EVENT_NAME.get(activity.activityType);
   if (!name) return {
     events: [],
@@ -126301,7 +126301,7 @@ function normalizeActivity(activity, ctx2) {
   const events = [];
   let dropped = 0;
   for (const item of activity.items) {
-    const event = buildEvent(name, activity.activityType, item, ctx2);
+    const event = buildEvent(name, activity.activityType, item, ctx);
     if (!event) {
       dropped++;
       continue;
@@ -126317,13 +126317,13 @@ function normalizeActivity(activity, ctx2) {
     forwardCompatible: activity.activityType === "document_context_changed" && dropped > 0 && events.length === 0
   };
 }
-function buildEvent(name, activityType, item, ctx2) {
+function buildEvent(name, activityType, item, ctx) {
   const actor = readActor(item);
   const base = {
-    meetingId: ctx2.meetingId,
+    meetingId: ctx.meetingId,
     actor,
-    selfEcho: isSelfEcho(actor, ctx2),
-    ...ctx2.includeRaw ? { raw: item } : {}
+    selfEcho: isSelfEcho(actor, ctx),
+    ...ctx.includeRaw ? { raw: item } : {}
   };
   switch (name) {
     case "transcript":
@@ -126422,10 +126422,10 @@ function readActorId(raw) {
   if (nested) return asString(nested.open_id) ?? asString(nested.user_id) ?? asString(nested.union_id) ?? "";
   return asString(raw.id) ?? asString(raw.open_id) ?? asString(raw.user_id) ?? asString(raw.union_id) ?? "";
 }
-function isSelfEcho(actor, ctx2) {
-  if (ctx2.mode === "uat") return false;
-  if (!ctx2.botOpenId) return true;
-  return actor.id === ctx2.botOpenId;
+function isSelfEcho(actor, ctx) {
+  if (ctx.mode === "uat") return false;
+  if (!ctx.botOpenId) return true;
+  return actor.id === ctx.botOpenId;
 }
 function readDoc(value) {
   const doc = asDict(value);
@@ -126596,11 +126596,11 @@ function extractMentions(raw, botOpenId) {
     mentionedBot
   };
 }
-function resolveMentions(content, ctx2) {
-  if (!content || ctx2.mentions.size === 0) return content;
+function resolveMentions(content, ctx) {
+  if (!content || ctx.mentions.size === 0) return content;
   let out = content;
-  for (const [key, info] of ctx2.mentions) {
-    if (info.isBot && ctx2.stripBotMentions) {
+  for (const [key, info] of ctx.mentions) {
+    if (info.isBot && ctx.stripBotMentions) {
       const re = new RegExp(`\\s?${escapeRegex(key)}\\s?`, "g");
       out = out.replace(re, " ");
       continue;
@@ -126734,7 +126734,7 @@ function buildChildrenMap(items, rootId) {
   });
   return map;
 }
-async function formatSubTree(parentId, map, ctx2, truncated = false) {
+async function formatSubTree(parentId, map, ctx, truncated = false) {
   const children = map.get(parentId);
   if (!children || children.length === 0) return {
     content: "<forwarded_messages/>",
@@ -126743,7 +126743,7 @@ async function formatSubTree(parentId, map, ctx2, truncated = false) {
   const parts = [];
   const resources = [];
   for (const item of children) try {
-    const sub = await renderItem(item, map, ctx2);
+    const sub = await renderItem(item, map, ctx);
     if (sub.content) parts.push(sub.content);
     resources.push(...sub.resources);
   } catch {
@@ -126759,26 +126759,26 @@ ${parts.join("\n")}${truncated ? "\n... (truncated)" : ""}
     resources
   };
 }
-async function renderItem(item, map, ctx2) {
+async function renderItem(item, map, ctx) {
   const msgType = item.msg_type ?? "text";
   const senderId = item.sender?.id ?? "unknown";
   const createMs = parseInt(String(item.create_time ?? "0"), 10);
   const timestamp = createMs > 0 ? formatRFC3339Beijing(createMs) : "unknown";
-  const displayName = ctx2.resolveUserName?.(senderId) ?? senderId;
+  const displayName = ctx.resolveUserName?.(senderId) ?? senderId;
   let content;
   let resources = [];
   if (msgType === "merge_forward") {
     const nestedId = item.message_id;
     if (nestedId) {
-      const sub = await formatSubTree(nestedId, map, ctx2);
+      const sub = await formatSubTree(nestedId, map, ctx);
       content = sub.content;
       resources = sub.resources;
     } else content = "<forwarded_messages/>";
   } else {
     const rawContent = item.body?.content ?? "{}";
-    if (!ctx2.dispatch) content = rawContent;
+    if (!ctx.dispatch) content = rawContent;
     else {
-      const r = await ctx2.dispatch(rawContent, msgType, ctx2);
+      const r = await ctx.dispatch(rawContent, msgType, ctx);
       content = r.content;
       resources = r.resources;
     }
@@ -126826,7 +126826,7 @@ function processMdText(text, resources) {
   }
   return parts.join("```");
 }
-function renderElement(el, ctx2, resources) {
+function renderElement(el, ctx, resources) {
   switch (el.tag) {
     case "text":
       return applyStyle(el.text ?? "", el.style);
@@ -126837,7 +126837,7 @@ function renderElement(el, ctx2, resources) {
     case "at": {
       const userId = el.user_id ?? "";
       if (userId === "all" || userId === "all_members") return "@all";
-      const info = ctx2.mentionsByOpenId.get(userId);
+      const info = ctx.mentionsByOpenId.get(userId);
       if (info) return info.key;
       return el.user_name ? `@${el.user_name}` : `@${userId}`;
     }
@@ -126885,12 +126885,12 @@ function extractPostPlainText(blocks) {
   }
   return lines.join("\n");
 }
-async function dispatchConvert(raw, msgType, ctx2) {
+async function dispatchConvert(raw, msgType, ctx) {
   const fn = converters.get(msgType) ?? convertUnknown;
   try {
-    return await fn(raw, ctx2);
+    return await fn(raw, ctx);
   } catch {
-    return convertUnknown(raw, ctx2);
+    return convertUnknown(raw, ctx);
   }
 }
 function normalizeBotAdded(event, opts) {
@@ -126980,7 +126980,7 @@ async function normalize(event, opts) {
   const botOpenId = opts.botIdentity?.openId;
   const { mentions, mentionsByOpenId, mentionList, mentionAll: mentionAllFromRaw, mentionedBot } = extractMentions(msg.mentions, botOpenId);
   const mentionAll = mentionAllFromRaw || detectMentionAllInContent(msg.content);
-  const ctx2 = {
+  const ctx = {
     messageId: msg.message_id,
     botOpenId,
     mentions,
@@ -126991,8 +126991,8 @@ async function normalize(event, opts) {
     batchResolveNames: opts.batchResolveNames,
     dispatch: dispatchConvert
   };
-  const { content: rawContent, resources } = await dispatchConvert(msg.content, msg.message_type, ctx2);
-  const content = resolveMentions(rawContent, ctx2);
+  const { content: rawContent, resources } = await dispatchConvert(msg.content, msg.message_type, ctx);
+  const content = resolveMentions(rawContent, ctx);
   const senderOpenId = event.sender.sender_id.open_id;
   const senderFallbackId = event.sender.sender_id.user_id ?? event.sender.sender_id.union_id ?? "";
   const senderId = senderOpenId ?? senderFallbackId;
@@ -129150,8 +129150,8 @@ ${formatCalendarInner(raw)}
     };
     MAX_ITEMS = 50;
     FORWARDED_FETCH_FAILED = '<forwarded_messages status="fetch_failed"/>';
-    convertMergeForward = async (_raw, ctx2) => {
-      const { messageId, fetchSubMessages, dispatch } = ctx2;
+    convertMergeForward = async (_raw, ctx) => {
+      const { messageId, fetchSubMessages, dispatch } = ctx;
       if (!fetchSubMessages || !dispatch) return {
         content: "<forwarded_messages/>",
         resources: []
@@ -129171,18 +129171,18 @@ ${formatCalendarInner(raw)}
       };
       const capped = items.slice(0, MAX_ITEMS);
       const truncated = items.length > MAX_ITEMS;
-      if (ctx2.batchResolveNames) {
+      if (ctx.batchResolveNames) {
         const senderIds = /* @__PURE__ */ new Set();
         for (const it of capped) {
           const sid = it.sender?.id;
           if (sid && it.message_id !== messageId) senderIds.add(sid);
         }
         if (senderIds.size > 0) try {
-          await ctx2.batchResolveNames([...senderIds]);
+          await ctx.batchResolveNames([...senderIds]);
         } catch {
         }
       }
-      const { content, resources } = await formatSubTree(messageId, buildChildrenMap(capped, messageId), ctx2, truncated);
+      const { content, resources } = await formatSubTree(messageId, buildChildrenMap(capped, messageId), ctx, truncated);
       return {
         content,
         resources
@@ -129191,7 +129191,7 @@ ${formatCalendarInner(raw)}
     placeholder = "[rich text message]";
     atMentionRe = /<at(\s+)user_id(\s*)=(\s*)"(.*?)">(.*?)<\/at>/g;
     imageKeyRe = /!\[(.*?)\]\(([^)]+)\)/g;
-    convertPost = async (raw, ctx2) => {
+    convertPost = async (raw, ctx) => {
       const rawParsed = safeParse(raw);
       if (rawParsed == null || typeof rawParsed !== "object") return {
         content: placeholder,
@@ -129213,7 +129213,7 @@ ${formatCalendarInner(raw)}
       for (const paragraph of sourceParagraphs) {
         if (!Array.isArray(paragraph)) continue;
         let line = "";
-        for (const el of paragraph) line += renderElement(el, ctx2, resources);
+        for (const el of paragraph) line += renderElement(el, ctx, resources);
         lines.push(line);
       }
       for (const att of attachments) {
@@ -136016,8 +136016,8 @@ var require_svg = __commonJS({
 var require_canvas = __commonJS({
   "node_modules/qrcode/lib/renderer/canvas.js"(exports) {
     var Utils = require_utils3();
-    function clearCanvas(ctx2, canvas, size) {
-      ctx2.clearRect(0, 0, canvas.width, canvas.height);
+    function clearCanvas(ctx, canvas, size) {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
       if (!canvas.style) canvas.style = {};
       canvas.height = size;
       canvas.width = size;
@@ -136043,11 +136043,11 @@ var require_canvas = __commonJS({
       }
       opts = Utils.getOptions(opts);
       const size = Utils.getImageWidth(qrData.modules.size, opts);
-      const ctx2 = canvasEl.getContext("2d");
-      const image = ctx2.createImageData(size, size);
+      const ctx = canvasEl.getContext("2d");
+      const image = ctx.createImageData(size, size);
       Utils.qrToImageData(image.data, qrData, opts);
-      clearCanvas(ctx2, canvasEl, size);
-      ctx2.putImageData(image, 0, 0);
+      clearCanvas(ctx, canvasEl, size);
+      ctx.putImageData(image, 0, 0);
       return canvasEl;
     };
     exports.renderToDataURL = function renderToDataURL(qrData, canvas, options) {
@@ -136515,6 +136515,18 @@ async function agentList() {
     return [];
   }
 }
+function agentListSync() {
+  try {
+    const stdout = execFileSync2("herdr", ["agent", "list"], {
+      encoding: "utf8",
+      timeout: 1e4,
+      stdio: ["ignore", "pipe", "ignore"]
+    });
+    return parse(stdout).result?.agents ?? [];
+  } catch {
+    return [];
+  }
+}
 async function promptPane(paneId, text) {
   try {
     const { stdout } = await execFileAsync("herdr", ["agent", "prompt", paneId, text], {
@@ -136533,6 +136545,19 @@ function findPaneForProject(agents, root) {
   if (inProject.length === 0) return null;
   const focused = inProject.find((a) => a.focused);
   return (focused ?? inProject[0]).pane_id;
+}
+function findPaneForSession(agents, sessionId) {
+  return agents.find((a) => a.agent_session?.value === sessionId)?.pane_id ?? null;
+}
+function identifySession(root, project) {
+  const paneId = currentPaneId();
+  const id = { sessionId: null, paneId, root, project, title: null };
+  if (!paneId) return id;
+  const me = agentListSync().find((a) => a.pane_id === paneId);
+  if (!me) return id;
+  id.sessionId = me.agent_session?.value ?? null;
+  id.title = me.terminal_title_stripped?.trim() || null;
+  return id;
 }
 var execFileAsync;
 var init_herdr = __esm({
@@ -136893,7 +136918,10 @@ var init_bindings = __esm({
             if (!b || typeof b.root !== "string" || typeof b.chatId !== "string") continue;
             b.notifyIdle = b.notifyIdle === true;
             b.idleMinMinutes = typeof b.idleMinMinutes === "number" ? b.idleMinMinutes : 10;
-            this.map.set(b.root, b);
+            if (typeof b.key !== "string") b.key = `proj:${b.root}`;
+            if (b.sessionId === void 0) b.sessionId = null;
+            if (b.task === void 0) b.task = null;
+            this.map.set(b.key, b);
           }
         } catch {
         }
@@ -136907,8 +136935,12 @@ var init_bindings = __esm({
 `, { mode: 384 });
         renameSync3(tmp, file);
       }
-      get(root) {
-        return this.map.get(root);
+      get(key) {
+        return this.map.get(key);
+      }
+      /** Every binding under one project root, for display and for `off --all`. */
+      byRoot(root) {
+        return [...this.map.values()].filter((b) => b.root === root);
       }
       byChat(chatId) {
         for (const b of this.map.values()) if (b.chatId === chatId) return b;
@@ -136921,25 +136953,48 @@ var init_bindings = __esm({
         return [...this.map.values()].map((b) => b.chatId);
       }
       set(b) {
-        this.map.set(b.root, b);
+        this.map.set(b.key, b);
         this.persist();
       }
       /** Refresh the fields a live call carries, without disturbing the binding. */
-      touch(root, patch) {
-        const b = this.map.get(root);
+      touch(key, patch) {
+        const b = this.map.get(key);
         if (!b) return void 0;
         if (patch.paneId !== void 0 && patch.paneId !== null) b.paneId = patch.paneId;
         if (patch.away !== void 0) b.away = patch.away;
         if (patch.notifyIdle !== void 0) b.notifyIdle = patch.notifyIdle;
         if (patch.idleMinMinutes !== void 0) b.idleMinMinutes = patch.idleMinMinutes;
         if (patch.label) b.label = patch.label;
+        if (patch.task !== void 0) b.task = patch.task;
         this.persist();
         return b;
       }
-      remove(root) {
-        const had = this.map.delete(root);
+      remove(key) {
+        const had = this.map.delete(key);
         if (had) this.persist();
         return had;
+      }
+      /** Turn remote mode on for every bound session. */
+      allAwayOn() {
+        let n = 0;
+        for (const b of this.map.values())
+          if (!b.away) {
+            b.away = true;
+            n += 1;
+          }
+        if (n) this.persist();
+        return n;
+      }
+      /** Turn remote mode off everywhere: the human is back, not "back here". */
+      allAwayOff() {
+        let n = 0;
+        for (const b of this.map.values())
+          if (b.away) {
+            b.away = false;
+            n += 1;
+          }
+        if (n) this.persist();
+        return n;
       }
     };
   }
@@ -136968,15 +137023,15 @@ function optionLines(options, recommend, lang) {
    ${o.consequence}`;
   }).join("\n");
 }
-function askCard(ctx2) {
-  const { payload: p, state } = ctx2;
+function askCard(ctx) {
+  const { payload: p, state } = ctx;
   const lang = p.lang ?? "zh";
   const T = t(lang);
   const head = HEADER[state];
   const statusWord = state === "answered" ? T.answered : state === "timedout" ? T.timedout : state === "cancelled" ? T.cancelled : "";
   const elements = [];
-  if (state === "answered" && ctx2.reply) {
-    elements.push(md(field(T.yourReply, ctx2.reply)), hr(), note(T.theQuestion));
+  if (state === "answered" && ctx.reply) {
+    elements.push(md(field(T.yourReply, ctx.reply)), hr(), note(T.theQuestion));
   }
   elements.push(
     md(field(T.doing, p.doing)),
@@ -136999,7 +137054,7 @@ ${optionLines(p.options, p.recommend, lang)}`),
         // Both the 1.0 `value` field and 2.0 `behaviors` reach the callback as
         // `action.value`; `value` is kept because it is the shorter of the two
         // and was verified to work on a schema-2.0 card.
-        value: { reqId: ctx2.reqId, optionId: o.id }
+        value: { reqId: ctx.reqId, optionId: o.id }
       };
       if (o.danger) {
         button.confirm = {
@@ -137012,7 +137067,7 @@ ${optionLines(p.options, p.recommend, lang)}`),
     elements.push(note(p.options.some((o) => o.danger) ? T.hintDanger : T.hint));
   }
   return card(
-    { icon: head.icon, title: `[${ctx2.projectLabel}] ${p.title}${statusWord ? ` \xB7 ${statusWord}` : ""}`, template: head.template },
+    { icon: head.icon, title: `[${ctx.projectLabel}] ${p.title}${statusWord ? ` \xB7 ${statusWord}` : ""}`, template: head.template },
     elements
   );
 }
@@ -137195,8 +137250,8 @@ async function runDaemon() {
   const refreshPolicy = () => {
     channel.updatePolicy({ groupAllowlist: bindings.chatIds() });
   };
-  const pendingFor = (root) => {
-    for (const p of pendings.values()) if (p.root === root && !p.done) return p;
+  const pendingFor = (key) => {
+    for (const p of pendings.values()) if (p.key === key && !p.done) return p;
     return void 0;
   };
   const answer = async (p, reply, via) => {
@@ -137235,7 +137290,7 @@ async function runDaemon() {
     try {
       await channel.send(b.chatId, { card: receiptCard(b.label, why) });
     } catch (err) {
-      log("receipt.failed", { root: b.root, err: String(err) });
+      log("receipt.failed", { key: b.key, err: String(err) });
     }
   };
   const explainPromptFailure = (code, message) => {
@@ -137252,14 +137307,16 @@ async function runDaemon() {
     }
   };
   const inject = async (b, text) => {
-    let paneId = b.paneId;
-    if (!paneId) paneId = findPaneForProject(await agentList(), b.root);
+    const agents = await agentList();
+    let paneId = b.sessionId ? findPaneForSession(agents, b.sessionId) : null;
+    if (!paneId) paneId = b.paneId;
+    if (!paneId) paneId = findPaneForProject(agents, b.root);
     if (!paneId) {
       await receipt(b, "\u8FD9\u4E2A\u9879\u76EE\u8FD8\u6CA1\u6709\u8BB0\u5F55\u5230 herdr \u7A97\u683C\uFF0C\u6D88\u606F\u6CA1\u5904\u53EF\u9001\u3002");
       return;
     }
     const outcome = await promptPane(paneId, `${INJECT_PREFIX}${text}`);
-    log("inject", { root: b.root, paneId, ok: outcome.ok, code: outcome.code });
+    log("inject", { key: b.key, paneId, ok: outcome.ok, code: outcome.code });
     if (!outcome.ok) await receipt(b, explainPromptFailure(outcome.code, outcome.message));
   };
   const transcribe = async (audioPath) => {
@@ -137372,13 +137429,13 @@ ${list}`;
     if (!away.length) return;
     const agents = await agentList();
     for (const b of away) {
-      if (pendingFor(b.root)) continue;
-      const a = agents.find((x) => x.pane_id === b.paneId);
+      if (pendingFor(b.key)) continue;
+      const a = (b.sessionId ? agents.find((x) => x.agent_session?.value === b.sessionId) : void 0) ?? agents.find((x) => x.pane_id === b.paneId);
       if (!a) continue;
-      const prev = lastStatus.get(b.root);
-      lastStatus.set(b.root, a.agent_status);
+      const prev = lastStatus.get(b.key);
+      lastStatus.set(b.key, a.agent_status);
       const now = Date.now();
-      if (a.agent_status === "working" && prev !== "working") workingSince.set(b.root, now);
+      if (a.agent_status === "working" && prev !== "working") workingSince.set(b.key, now);
       if (!prev || prev === a.agent_status) continue;
       let kind = null;
       let ranMs = 0;
@@ -137386,22 +137443,22 @@ ${list}`;
         kind = "blocked";
       } else if (prev === "working" && (a.agent_status === "idle" || a.agent_status === "done")) {
         if (!b.notifyIdle) continue;
-        ranMs = now - (workingSince.get(b.root) ?? now);
+        ranMs = now - (workingSince.get(b.key) ?? now);
         if (ranMs < b.idleMinMinutes * 6e4) continue;
         kind = "idle";
       }
       if (!kind) continue;
-      if (now - (lastStatusPush.get(b.root) ?? 0) < STATUS_COOLDOWN_MS) continue;
-      lastStatusPush.set(b.root, now);
+      if (now - (lastStatusPush.get(b.key) ?? 0) < STATUS_COOLDOWN_MS) continue;
+      lastStatusPush.set(b.key, now);
       const ranFor = ranMs ? `
 \u8DD1\u4E86 ${Math.round(ranMs / 6e4)} \u5206\u949F` : "";
       const detail = (a.terminal_title_stripped ? `**${a.terminal_title_stripped}**
 ` : "") + `\u7A97\u683C ${a.pane_id}${ranFor}`;
       try {
         await channel.send(b.chatId, { card: statusCard(b.label, kind, detail) });
-        log("status.pushed", { root: b.root, kind });
+        log("status.pushed", { key: b.key, kind });
       } catch (err) {
-        log("status.failed", { root: b.root, err: String(err) });
+        log("status.failed", { key: b.key, err: String(err) });
       }
     }
   };
@@ -137432,7 +137489,7 @@ ${list}`;
     process.exit(0);
   };
   server = await serve({
-    handle: async (req, ctx2) => {
+    handle: async (req, ctx) => {
       switch (req.type) {
         case "ping":
           return {
@@ -137454,8 +137511,10 @@ ${list}`;
             ok: true,
             kind: "list",
             bindings: bindings.all().map((b) => ({
+              key: b.key,
               root: b.root,
               label: b.label,
+              task: b.task,
               chatId: b.chatId,
               paneId: b.paneId,
               away: b.away,
@@ -137464,13 +137523,17 @@ ${list}`;
             }))
           };
         case "bind": {
-          const existing = bindings.get(req.root);
+          const c = req.caller;
+          const existing = bindings.get(c.key);
           if (req.chatId) {
             const b = {
-              root: req.root,
-              label: req.label,
+              key: c.key,
+              sessionId: c.sessionId,
+              root: c.root,
+              task: c.task,
+              label: c.project,
               chatId: req.chatId,
-              paneId: req.paneId ?? existing?.paneId ?? null,
+              paneId: c.paneId ?? existing?.paneId ?? null,
               away: existing?.away ?? false,
               notifyIdle: existing?.notifyIdle ?? false,
               idleMinMinutes: existing?.idleMinMinutes ?? 10,
@@ -137478,14 +137541,30 @@ ${list}`;
             };
             bindings.set(b);
             refreshPolicy();
-            log("bind", { root: req.root, chatId: req.chatId, created: false });
-            return { ok: true, kind: "bind", chatId: req.chatId, created: false, name: req.label };
+            log("bind", { key: c.key, chatId: req.chatId, created: false });
+            return { ok: true, kind: "bind", chatId: req.chatId, created: false, name: c.project };
           }
           if (existing) {
-            bindings.touch(req.root, { paneId: req.paneId, label: req.label });
+            bindings.touch(c.key, { paneId: c.paneId, label: c.project, task: c.task });
             return { ok: true, kind: "bind", chatId: existing.chatId, created: false, name: existing.label };
           }
-          const marker = `herdr-lark \xB7 ${req.root}`;
+          const legacy = bindings.get(`proj:${c.root}`);
+          if (legacy) {
+            bindings.remove(legacy.key);
+            const adopted = {
+              ...legacy,
+              key: c.key,
+              sessionId: c.sessionId,
+              task: c.task,
+              label: c.project,
+              paneId: c.paneId ?? legacy.paneId
+            };
+            bindings.set(adopted);
+            refreshPolicy();
+            log("bind.adopted", { from: legacy.key, to: c.key, chatId: adopted.chatId });
+            return { ok: true, kind: "bind", chatId: adopted.chatId, created: false, name: adopted.label };
+          }
+          const marker = `herdr-lark \xB7 ${c.key}`;
           try {
             for (const summary of await channel.listChats()) {
               let info;
@@ -137496,10 +137575,13 @@ ${list}`;
               }
               if (info.description !== marker) continue;
               const b = {
-                root: req.root,
-                label: req.label,
+                key: c.key,
+                sessionId: c.sessionId,
+                root: c.root,
+                task: c.task,
+                label: c.project,
                 chatId: summary.id,
-                paneId: req.paneId,
+                paneId: c.paneId,
                 away: false,
                 notifyIdle: false,
                 idleMinMinutes: 10,
@@ -137507,11 +137589,11 @@ ${list}`;
               };
               bindings.set(b);
               refreshPolicy();
-              log("bind.reused", { root: req.root, chatId: summary.id });
+              log("bind.reused", { key: c.key, chatId: summary.id });
               return { ok: true, kind: "bind", chatId: summary.id, created: false, name: summary.name };
             }
           } catch (err) {
-            log("bind.scan-failed", { root: req.root, err: String(err) });
+            log("bind.scan-failed", { key: c.key, err: String(err) });
           }
           const owner = creds.ownerOpenId;
           if (!owner) {
@@ -137521,19 +137603,22 @@ ${list}`;
               message: "\u4E0D\u77E5\u9053\u8BE5\u628A\u8C01\u62C9\u8FDB\u65B0\u7FA4\uFF08\u6CA1\u6709\u8BB0\u5F55\u5E94\u7528 owner\uFF09\u3002\u7528 --chat <chat_id> \u7ED1\u5B9A\u4E00\u4E2A\u4F60\u81EA\u5DF1\u5EFA\u597D\u7684\u7FA4\u3002"
             };
           }
-          const name = req.name?.trim() || `\u{1F916} ${req.label}`;
+          const name = req.name?.trim() || (c.task ? `\u{1F916} ${c.project} \xB7 ${c.task}` : `\u{1F916} ${c.project}`);
           try {
             const { chatId } = await channel.createChat({
               name,
-              description: `herdr-lark \xB7 ${req.root}`,
+              description: marker,
               inviteUserIds: [owner],
               userIdType: "open_id"
             });
             const b = {
-              root: req.root,
-              label: req.label,
+              key: c.key,
+              sessionId: c.sessionId,
+              root: c.root,
+              task: c.task,
+              label: c.project,
               chatId,
-              paneId: req.paneId,
+              paneId: c.paneId,
               away: false,
               notifyIdle: false,
               idleMinMinutes: 10,
@@ -137541,7 +137626,7 @@ ${list}`;
             };
             bindings.set(b);
             refreshPolicy();
-            log("bind", { root: req.root, chatId, created: true });
+            log("bind", { key: c.key, chatId, created: true });
             return { ok: true, kind: "bind", chatId, created: true, name };
           } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
@@ -137554,31 +137639,40 @@ ${list}`;
           }
         }
         case "unbind": {
-          const b = bindings.get(req.root);
-          if (!b) return { ok: false, code: 1, message: "\u8FD9\u4E2A\u9879\u76EE\u672C\u6765\u5C31\u6CA1\u7ED1\u5B9A" };
-          const p = pendingFor(req.root);
+          const b = bindings.get(req.caller.key);
+          if (!b) return { ok: false, code: 1, message: "\u8FD9\u4E2A\u4F1A\u8BDD\u672C\u6765\u5C31\u6CA1\u7ED1\u5B9A" };
+          const p = pendingFor(req.caller.key);
           if (p) return { ok: false, code: 4, message: "\u8FD8\u6709\u4E00\u4E2A\u95EE\u9898\u6302\u5728\u624B\u673A\u4E0A\uFF0C\u5148\u56DE\u7B54\u6216\u7B49\u5B83\u8D85\u65F6" };
-          bindings.remove(req.root);
+          bindings.remove(req.caller.key);
           refreshPolicy();
-          log("unbind", { root: req.root });
+          log("unbind", { key: req.caller.key });
           return { ok: true, kind: "ack" };
         }
         case "setAway": {
-          const b = bindings.touch(req.root, {
+          if (req.all) {
+            const n = req.away ? bindings.allAwayOn() : bindings.allAwayOff();
+            lastStatus.clear();
+            workingSince.clear();
+            log("away.all", { away: req.away, count: n });
+            return { ok: true, kind: "ack", count: n };
+          }
+          const b = bindings.touch(req.caller.key, {
             away: req.away,
-            paneId: req.paneId,
+            paneId: req.caller.paneId,
+            label: req.caller.project,
+            task: req.caller.task,
             notifyIdle: req.notifyIdle,
             idleMinMinutes: req.idleMinMinutes
           });
-          if (!b) return { ok: false, code: 4, message: "\u8FD9\u4E2A\u9879\u76EE\u8FD8\u6CA1 bind\uFF0C\u5148\u8DD1 herdr-lark bind" };
-          lastStatus.delete(req.root);
-          workingSince.delete(req.root);
-          log("away", { root: req.root, away: req.away, notifyIdle: b.notifyIdle });
+          if (!b) return { ok: false, code: 4, message: "\u8FD9\u4E2A\u4F1A\u8BDD\u8FD8\u6CA1\u7ED1\u5B9A\uFF0C\u5148\u8DD1 herdr-lark away on" };
+          lastStatus.delete(req.caller.key);
+          workingSince.delete(req.caller.key);
+          log("away", { key: req.caller.key, away: req.away, notifyIdle: b.notifyIdle });
           return { ok: true, kind: "ack" };
         }
         case "notify": {
-          const b = bindings.touch(req.root, { paneId: req.paneId, label: req.label });
-          if (!b) return { ok: false, code: 4, message: "\u8FD9\u4E2A\u9879\u76EE\u8FD8\u6CA1 bind\uFF0C\u5148\u8DD1 herdr-lark bind" };
+          const b = bindings.touch(req.caller.key, { paneId: req.caller.paneId, label: req.caller.project, task: req.caller.task });
+          if (!b) return { ok: false, code: 4, message: "\u8FD9\u4E2A\u4F1A\u8BDD\u8FD8\u6CA1\u7ED1\u5B9A\uFF0C\u5148\u8DD1 herdr-lark away on" };
           let payload;
           try {
             payload = validateNotify(req.payload);
@@ -137588,28 +137682,28 @@ ${list}`;
           }
           try {
             await channel.send(b.chatId, { card: notifyCard(payload, b.label) });
-            log("notify.sent", { root: b.root });
+            log("notify.sent", { key: b.key });
             return { ok: true, kind: "ack" };
           } catch (err) {
             return { ok: false, code: 3, message: `\u53D1\u9001\u5931\u8D25\uFF1A${err instanceof Error ? err.message : String(err)}` };
           }
         }
         case "say": {
-          const b = bindings.touch(req.root, { paneId: req.paneId, label: req.label });
+          const b = bindings.touch(req.caller.key, { paneId: req.caller.paneId, label: req.caller.project, task: req.caller.task });
           if (!b) return { ok: false, code: 4, message: "\u8FD9\u4E2A\u9879\u76EE\u8FD8\u6CA1 bind\uFF0C\u5148\u8DD1 herdr-lark away on" };
           const text = req.text.trim();
           if (!text) return { ok: false, code: 1, message: "\u6CA1\u6709\u5185\u5BB9\u53EF\u53D1" };
           try {
             await channel.send(b.chatId, { card: sayCard(text, b.label, req.title) });
-            log("say.sent", { root: b.root, chars: text.length });
+            log("say.sent", { key: b.key, chars: text.length });
             return { ok: true, kind: "ack" };
           } catch (err) {
             return { ok: false, code: 3, message: `\u53D1\u9001\u5931\u8D25\uFF1A${err instanceof Error ? err.message : String(err)}` };
           }
         }
         case "sendFile": {
-          const b = bindings.touch(req.root, { paneId: req.paneId, label: req.label });
-          if (!b) return { ok: false, code: 4, message: "\u8FD9\u4E2A\u9879\u76EE\u8FD8\u6CA1 bind\uFF0C\u5148\u8DD1 herdr-lark bind" };
+          const b = bindings.touch(req.caller.key, { paneId: req.caller.paneId, label: req.caller.project, task: req.caller.task });
+          if (!b) return { ok: false, code: 4, message: "\u8FD9\u4E2A\u4F1A\u8BDD\u8FD8\u6CA1\u7ED1\u5B9A\uFF0C\u5148\u8DD1 herdr-lark away on" };
           const checked = resolveSendable(req.path, b.root);
           if ("error" in checked) return { ok: false, code: 1, message: checked.error };
           const { real, bytes } = checked;
@@ -137621,16 +137715,16 @@ ${list}`;
               b.chatId,
               isImage ? { image: { source: bytes } } : { file: { source: bytes, fileName } }
             );
-            log("file.sent", { root: b.root, isImage, size: bytes.length });
+            log("file.sent", { key: b.key, isImage, size: bytes.length });
             return { ok: true, kind: "ack" };
           } catch (err) {
             return { ok: false, code: 3, message: `\u53D1\u9001\u5931\u8D25\uFF1A${err instanceof Error ? err.message : String(err)}` };
           }
         }
         case "ask": {
-          const b = bindings.touch(req.root, { paneId: req.paneId, label: req.label });
-          if (!b) return { ok: false, code: 4, message: "\u8FD9\u4E2A\u9879\u76EE\u8FD8\u6CA1 bind\uFF0C\u5148\u8DD1 herdr-lark bind" };
-          if (pendingFor(req.root))
+          const b = bindings.touch(req.caller.key, { paneId: req.caller.paneId, label: req.caller.project, task: req.caller.task });
+          if (!b) return { ok: false, code: 4, message: "\u8FD9\u4E2A\u4F1A\u8BDD\u8FD8\u6CA1\u7ED1\u5B9A\uFF0C\u5148\u8DD1 herdr-lark away on" };
+          if (pendingFor(req.caller.key))
             return { ok: false, code: 4, message: "\u8FD9\u4E2A\u9879\u76EE\u5DF2\u7ECF\u6709\u4E00\u4E2A\u95EE\u9898\u6302\u5728\u624B\u673A\u4E0A\u4E86\uFF1B\u4E00\u6B21\u53EA\u80FD\u95EE\u4E00\u4E2A" };
           let payload;
           try {
@@ -137649,10 +137743,11 @@ ${list}`;
           } catch (err) {
             return { ok: false, code: 3, message: `\u53D1\u9001\u5931\u8D25\uFF1A${err instanceof Error ? err.message : String(err)}` };
           }
-          log("ask.sent", { reqId, root: b.root, options: payload.options.length });
+          log("ask.sent", { reqId, key: b.key, options: payload.options.length });
           return await new Promise((resolve2) => {
             const p = {
               reqId,
+              key: b.key,
               root: b.root,
               chatId: b.chatId,
               messageId,
@@ -137669,7 +137764,7 @@ ${list}`;
               }, req.timeoutMs)
             };
             pendings.set(reqId, p);
-            ctx2.onClose(() => {
+            ctx.onClose(() => {
               if (!p.done)
                 void closeWithout(p, "cancelled", {
                   ok: false,
@@ -137677,7 +137772,7 @@ ${list}`;
                   message: "\u63D0\u95EE\u65B9\u65AD\u5F00\u4E86"
                 });
             });
-            ctx2.note(`\u5DF2\u53D1\u5230\u98DE\u4E66\u7FA4\uFF0C\u7B49\u4F60\u56DE\u7B54\uFF08\u6700\u957F ${Math.round(req.timeoutMs / 1e3)} \u79D2\uFF09`);
+            ctx.note(`\u5DF2\u53D1\u5230\u98DE\u4E66\u7FA4\uFF0C\u7B49\u4F60\u56DE\u7B54\uFF08\u6700\u957F ${Math.round(req.timeoutMs / 1e3)} \u79D2\uFF09`);
           });
         }
         default:
@@ -137743,7 +137838,8 @@ var HELP = `herdr-lark \u2014 \u628A herdr \u91CC\u8DD1\u7740\u7684 agent \u4F1A
   notify                             stdin \u8BFB JSON\uFF0C\u63A8\u4E00\u6761\u5E26\u6807\u9898\u7684\u901A\u77E5\u5361\uFF08\u91CD\u5927\u4E8B\u9879\uFF09
   say [--title <\u4E00\u53E5\u8BDD>]             stdin \u8BFB markdown\uFF0C\u628A\u7EC8\u7AEF\u56DE\u590D\u540C\u6B65\u5230\u7FA4\uFF08\u8FDC\u7A0B\u6A21\u5F0F\u4E0B\u6BCF\u6B21\u56DE\u590D\u90FD\u53D1\uFF09
   send-file <\u8DEF\u5F84> [--caption <\u8BF4\u660E>] \u628A\u56FE\u7247\u6216\u6587\u4EF6\u53D1\u5230\u9879\u76EE\u7FA4
-  away on [--idle [\u5206\u949F]] | off | status   \u8FDC\u7A0B\u6A21\u5F0F\uFF1B\u9ED8\u8BA4\u53EA\u63A8\u300C\u5361\u4F4F\u4E86\u300D\uFF0C\u4E0D\u63A8\u300C\u5E72\u5B8C\u4E86\u300D
+  away on|off [--all] [--idle [\u5206\u949F]]  \u8FDC\u7A0B\u6A21\u5F0F\uFF08\u6309\u4F1A\u8BDD\uFF0C\u4E0D\u6309\u76EE\u5F55\uFF09\uFF1B--all \u4E00\u6B21\u7BA1\u6240\u6709\u4F1A\u8BDD
+  away status [--json]               \u770B\u5F53\u524D\u4F1A\u8BDD\u7684\u5F00\u5173\u72B6\u6001
   status                             daemon \u4E0E\u7ED1\u5B9A\u6982\u89C8
 
 \u9000\u51FA\u7801\uFF1A0 \u6210\u529F \xB7 1 \u8F93\u5165\u6709\u95EE\u9898 \xB7 2 \u8D85\u65F6\u6CA1\u4EBA\u56DE\u7B54 \xB7 3 \u901A\u9053\u6545\u969C \xB7 4 \u9700\u8981\u4EBA\u52A8\u624B
@@ -137792,9 +137888,12 @@ async function readStdin() {
   for await (const chunk of process.stdin) chunks.push(chunk);
   return Buffer.concat(chunks).toString("utf8");
 }
-function ctx() {
+function caller() {
   const root = projectRoot();
-  return { root, label: projectLabel(root), paneId: currentPaneId() };
+  const project = projectLabel(root);
+  const id = identifySession(root, project);
+  const key = id.sessionId ? `sess:${id.sessionId}` : id.paneId ? `pane:${id.paneId}` : `proj:${root}`;
+  return { key, sessionId: id.sessionId, root, project, task: id.title, paneId: id.paneId };
 }
 function finish(res, onOk) {
   if (res.ok) {
@@ -138001,18 +138100,12 @@ async function cmdDaemon(args) {
   await runDaemon2();
 }
 async function cmdBind(args) {
-  const { root, label } = ctx();
-  const res = await request({
-    type: "bind",
-    root,
-    label,
-    paneId: currentPaneId(),
-    chatId: opt(args, "chat"),
-    name: opt(args, "name")
-  });
+  const c = caller();
+  const root = c.root;
+  const res = await request({ type: "bind", caller: c, chatId: opt(args, "chat"), name: opt(args, "name") });
   finish(res, (r) => {
     if (r.kind !== "bind") return;
-    writeProjectState(root, { chatId: r.chatId, paneId: currentPaneId() }, { create: true });
+    writeProjectState(root, { chatId: r.chatId, paneId: c.paneId }, { create: true });
     process.stdout.write(
       r.created ? `\u2705 \u5DF2\u65B0\u5EFA\u98DE\u4E66\u7FA4\u300C${r.name}\u300D\u5E76\u7ED1\u5B9A\u5230 ${root}
    \u6253\u5F00\u98DE\u4E66\u5C31\u80FD\u770B\u5230\u8FD9\u4E2A\u7FA4\uFF1B\u4EE5\u540E\u8FD9\u4E2A\u9879\u76EE\u7684\u63D0\u95EE\u90FD\u53D1\u5728\u91CC\u9762\u3002
@@ -138022,15 +138115,17 @@ async function cmdBind(args) {
   });
 }
 async function cmdUnbind() {
-  const { root } = ctx();
-  const res = await request({ type: "unbind", root });
+  const c = caller();
+  const root = c.root;
+  const res = await request({ type: "unbind", caller: c });
   finish(res, () => {
     writeProjectState(root, { chatId: null, away: false });
     process.stdout.write("\u5DF2\u89E3\u7ED1\u3002\u98DE\u4E66\u7FA4\u8FD8\u5728\uFF0C\u9700\u8981\u7684\u8BDD\u81EA\u5DF1\u5F52\u6863\u3002\n");
   });
 }
 async function cmdAsk(args) {
-  const { root, label, paneId } = ctx();
+  const c = caller();
+  const root = c.root;
   const raw = await readStdin();
   let payload;
   try {
@@ -138049,7 +138144,7 @@ async function cmdAsk(args) {
   const seconds = Number(opt(args, "timeout") ?? 43200);
   if (!Number.isFinite(seconds) || seconds <= 0) die(1, "--timeout \u8981\u662F\u6B63\u6574\u6570\u79D2");
   const res = await request(
-    { type: "ask", root, label, paneId, payload, timeoutMs: seconds * 1e3 },
+    { type: "ask", caller: c, payload, timeoutMs: seconds * 1e3 },
     { onNote: (text) => process.stderr.write(`note: ${text}
 `) }
   );
@@ -138059,7 +138154,8 @@ async function cmdAsk(args) {
   });
 }
 async function cmdNotify() {
-  const { root, label, paneId } = ctx();
+  const c = caller();
+  const root = c.root;
   const raw = await readStdin();
   let payload;
   try {
@@ -138075,26 +138171,29 @@ async function cmdNotify() {
   ${err.problems.join("\n  ")}`);
     throw err;
   }
-  const res = await request({ type: "notify", root, label, paneId, payload });
+  const res = await request({ type: "notify", caller: c, payload });
   finish(res, () => process.stdout.write("\u901A\u77E5\u5DF2\u53D1\u51FA\uFF08\u5BF9\u65B9\u5982\u679C\u56DE\u6D88\u606F\uFF0C\u4F1A\u4F5C\u4E3A\u6307\u4EE4\u6CE8\u5165\u5230\u8FD9\u4E2A\u7A97\u683C\uFF09\n"));
 }
 async function cmdSay(args) {
-  const { root, label, paneId } = ctx();
+  const c = caller();
+  const root = c.root;
   const text = await readStdin();
   if (!text.trim()) die(1, "\u6CA1\u6709\u5185\u5BB9\u53EF\u53D1\uFF08\u4ECE stdin \u8BFB\u6B63\u6587\uFF09");
-  const res = await request({ type: "say", root, label, paneId, text, title: opt(args, "title") });
+  const res = await request({ type: "say", caller: c, text, title: opt(args, "title") });
   finish(res, () => process.stdout.write("\u5DF2\u540C\u6B65\u5230\u98DE\u4E66\u7FA4\n"));
 }
 async function cmdSendFile(args) {
-  const { root, label, paneId } = ctx();
+  const c = caller();
+  const root = c.root;
   const path2 = args.find((a) => !a.startsWith("--"));
   if (!path2) die(1, "\u7528\u6CD5\uFF1Aherdr-lark send-file <\u8DEF\u5F84> [--caption <\u8BF4\u660E>]");
-  const res = await request({ type: "sendFile", root, label, paneId, path: path2, caption: opt(args, "caption") });
+  const res = await request({ type: "sendFile", caller: c, path: path2, caption: opt(args, "caption") });
   finish(res, () => process.stdout.write("\u5DF2\u53D1\u5230\u9879\u76EE\u7FA4\n"));
 }
 async function cmdAway(args) {
   const sub = args.find((a) => !a.startsWith("--")) ?? "status";
-  const { root, paneId } = ctx();
+  const c = caller();
+  const root = c.root;
   if (sub === "status") {
     const state = readProjectState(root);
     if (flag(args, "json")) {
@@ -138112,24 +138211,20 @@ async function cmdAway(args) {
     );
     return;
   }
-  if (sub !== "on" && sub !== "off") die(1, "\u7528\u6CD5\uFF1Aherdr-lark away on|off|status");
+  if (sub !== "on" && sub !== "off") die(1, "\u7528\u6CD5\uFF1Aherdr-lark away on|off|status [--all]");
   const away = sub === "on";
+  const all = flag(args, "all");
   const idleFlag = args.includes("--idle");
-  if (away) {
+  if (away && !all) {
     if (!resolveCreds()) die(4, "\u8FD8\u6CA1\u6709\u98DE\u4E66\u5E94\u7528\u51ED\u636E\u3002\u5148\u8DD1\u4E00\u6B21\uFF1Aherdr-lark setup");
     const d = await startDaemonDetached();
     if (!d.ok) die(3, d.message);
     process.stdout.write(`${d.message}
 `);
-    const bindRes = await request({
-      type: "bind",
-      root,
-      label: projectLabel(root),
-      paneId
-    });
+    const bindRes = await request({ type: "bind", caller: c });
     if (!bindRes.ok) die(bindRes.code, bindRes.message);
     if (bindRes.kind === "bind") {
-      writeProjectState(root, { chatId: bindRes.chatId, paneId }, { create: true });
+      writeProjectState(root, { chatId: bindRes.chatId, paneId: c.paneId }, { create: true });
       process.stdout.write(
         bindRes.created ? `\u5DF2\u65B0\u5EFA\u98DE\u4E66\u7FA4\u300C${bindRes.name}\u300D
 ` : `\u5DF2\u8FDE\u5230\u98DE\u4E66\u7FA4\u300C${bindRes.name}\u300D
@@ -138142,16 +138237,25 @@ async function cmdAway(args) {
     die(1, "--idle \u540E\u9762\u8981\u4E48\u4E0D\u5E26\u503C\uFF08\u9ED8\u8BA4 10 \u5206\u949F\uFF09\uFF0C\u8981\u4E48\u662F\u6B63\u6574\u6570\u5206\u949F");
   const res = await request({
     type: "setAway",
-    root,
+    caller: c,
     away,
-    paneId,
+    all,
     notifyIdle: away ? idleFlag : false,
     idleMinMinutes: idleFlag ? idleMinutes : void 0
   });
-  finish(res, () => {
-    writeProjectState(root, { away, paneId }, { create: true });
+  finish(res, (r) => {
+    if (all) {
+      const n = r.kind === "ack" ? r.count ?? 0 : 0;
+      process.stdout.write(
+        away ? `\u5DF2\u5BF9\u5168\u90E8 ${n} \u4E2A\u4F1A\u8BDD\u5F00\u542F\u8FDC\u7A0B\u6A21\u5F0F\u3002
+` : `\u5DF2\u5173\u95ED\u5168\u90E8 ${n} \u4E2A\u4F1A\u8BDD\u7684\u8FDC\u7A0B\u6A21\u5F0F\u2014\u2014\u624B\u673A\u4E0D\u4F1A\u518D\u6536\u5230\u4EFB\u4F55\u63A8\u9001\u3002
+`
+      );
+      return;
+    }
+    writeProjectState(root, { away, paneId: c.paneId }, { create: true });
     if (!away) {
-      process.stdout.write("\u8FDC\u7A0B\u6A21\u5F0F\u5DF2\u5173\u95ED\u3002\n");
+      process.stdout.write("\u8FDC\u7A0B\u6A21\u5F0F\u5DF2\u5173\u95ED\uFF08\u53EA\u662F\u8FD9\u4E2A\u4F1A\u8BDD\uFF1B\u5176\u4ED6\u4F1A\u8BDD\u7528 away off --all\uFF09\u3002\n");
       return;
     }
     process.stdout.write(

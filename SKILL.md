@@ -34,8 +34,16 @@ cd <project> && herdr-lark away on      # starts the daemon, creates this projec
 reuses) a Feishu group for this project, and only then flips the switch. If any step fails it leaves
 the switch off rather than half-on.
 
-A project is the git toplevel (the cwd outside a repo). Calling `ask` or `notify` from a project that
-was never bound exits 4 — relay stderr and have the human run `away on` there.
+**The unit is the agent session, not the directory.** Several sessions routinely run in one repo on
+different tasks; keying on the directory would give them a single group and a single question slot
+between them, and deliver a phone reply to whichever pane ran a command last — the wrong agent acting
+on the human's instruction. Each session gets its own group, named after its task.
+
+Calling `ask` or `notify` from a session that was never bound exits 4 — relay stderr and have the human
+run `away on` there.
+
+`away off` silences only the session you are in; `away off --all` silences every one of them. The
+asymmetry is deliberate: someone who says "I'm back" is back as a person, not back in one directory.
 
 ## Ask a question
 
@@ -170,7 +178,7 @@ One resident process owns the Feishu WebSocket; the commands above only talk to 
 
 ## Remote mode
 
-`herdr-lark away on` / `off`, read with `away status --json`. While on, the daemon pushes a card when the
+`herdr-lark away on` / `off` (add `--all` to cover every bound session), read with `away status --json`. While on, the daemon pushes a card when the
 agent is **stuck on a prompt only the human can answer**. "Finished" is off by default — it fires at the
 end of every turn and is pure noise while they are at the keyboard; `away on --idle 30` enables it for
 turns that ran at least 30 minutes.

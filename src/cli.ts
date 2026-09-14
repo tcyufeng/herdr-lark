@@ -6,8 +6,8 @@ import { createLarkChannel, registerApp } from '@larksuite/channel';
 import QRCode from 'qrcode';
 import { clearCreds, credsReport, defaultStore, resolveCreds, writeCreds, type StoreKind } from './creds.js';
 import { envFile } from './creds.js';
-import { currentPaneId, insideHerdr } from './herdr.js';
-import { isDaemonListening, request, type Response } from './ipc.js';
+import { currentPaneId, identifySession, insideHerdr } from './herdr.js';
+import { isDaemonListening, request, type Caller, type Response } from './ipc.js';
 import { ensureHomeDir, logPath, pidPath, projectLabel, projectRoot, readProjectState, sockPath, writeProjectState } from './paths.js';
 import { validateAsk, validateNotify, ValidationError } from './validate.js';
 
@@ -31,7 +31,8 @@ const HELP = `herdr-lark — 把 herdr 里跑着的 agent 会话接到飞书
   notify                             stdin 读 JSON，推一条带标题的通知卡（重大事项）
   say [--title <一句话>]             stdin 读 markdown，把终端回复同步到群（远程模式下每次回复都发）
   send-file <路径> [--caption <说明>] 把图片或文件发到项目群
-  away on [--idle [分钟]] | off | status   远程模式；默认只推「卡住了」，不推「干完了」
+  away on|off [--all] [--idle [分钟]]  远程模式（按会话，不按目录）；--all 一次管所有会话
+  away status [--json]               看当前会话的开关状态
   status                             daemon 与绑定概览
 
 退出码：0 成功 · 1 输入有问题 · 2 超时没人回答 · 3 通道故障 · 4 需要人动手
@@ -90,9 +91,23 @@ async function readStdin(): Promise<string> {
   return Buffer.concat(chunks).toString('utf8');
 }
 
-function ctx(): { root: string; label: string; paneId: string | null } {
+/**
+ * Who is calling. The lease holder is the **agent session**, not the
+ * directory: several sessions routinely run in one repo on different tasks,
+ * and keying on the directory would give them one group and one question slot
+ * between them — and deliver a phone reply to whichever pane ran a command
+ * last, i.e. to the wrong agent.
+ */
+function caller(): Caller {
   const root = projectRoot();
-  return { root, label: projectLabel(root), paneId: currentPaneId() };
+  const project = projectLabel(root);
+  const id = identifySession(root, project);
+  const key = id.sessionId
+    ? `sess:${id.sessionId}`
+    : id.paneId
+      ? `pane:${id.paneId}`
+      : `proj:${root}`;
+  return { key, sessionId: id.sessionId, root, project, task: id.title, paneId: id.paneId };
 }
 
 /** Turn a daemon response into this process's exit. */
@@ -313,18 +328,12 @@ async function cmdDaemon(args: string[]): Promise<void> {
 // ---------------------------------------------------------------- bind
 
 async function cmdBind(args: string[]): Promise<void> {
-  const { root, label } = ctx();
-  const res = await request({
-    type: 'bind',
-    root,
-    label,
-    paneId: currentPaneId(),
-    chatId: opt(args, 'chat'),
-    name: opt(args, 'name'),
-  });
+  const c = caller();
+  const root = c.root;
+  const res = await request({ type: 'bind', caller: c, chatId: opt(args, 'chat'), name: opt(args, 'name') });
   finish(res, (r) => {
     if (r.kind !== 'bind') return;
-    writeProjectState(root, { chatId: r.chatId, paneId: currentPaneId() }, { create: true });
+    writeProjectState(root, { chatId: r.chatId, paneId: c.paneId }, { create: true });
     process.stdout.write(
       r.created
         ? `✅ 已新建飞书群「${r.name}」并绑定到 ${root}\n   打开飞书就能看到这个群；以后这个项目的提问都发在里面。\n`
@@ -334,8 +343,9 @@ async function cmdBind(args: string[]): Promise<void> {
 }
 
 async function cmdUnbind(): Promise<void> {
-  const { root } = ctx();
-  const res = await request({ type: 'unbind', root });
+  const c = caller();
+  const root = c.root;
+  const res = await request({ type: 'unbind', caller: c });
   finish(res, () => {
     writeProjectState(root, { chatId: null, away: false });
     process.stdout.write('已解绑。飞书群还在，需要的话自己归档。\n');
@@ -345,7 +355,8 @@ async function cmdUnbind(): Promise<void> {
 // ---------------------------------------------------------------- ask / notify
 
 async function cmdAsk(args: string[]): Promise<void> {
-  const { root, label, paneId } = ctx();
+  const c = caller();
+  const root = c.root;
   const raw = await readStdin();
   let payload: unknown;
   try {
@@ -365,7 +376,7 @@ async function cmdAsk(args: string[]): Promise<void> {
   const seconds = Number(opt(args, 'timeout') ?? 43_200);
   if (!Number.isFinite(seconds) || seconds <= 0) die(1, '--timeout 要是正整数秒');
   const res = await request(
-    { type: 'ask', root, label, paneId, payload, timeoutMs: seconds * 1000 },
+    { type: 'ask', caller: c, payload, timeoutMs: seconds * 1000 },
     { onNote: (text) => process.stderr.write(`note: ${text}\n`) },
   );
   finish(res, (r) => {
@@ -374,7 +385,8 @@ async function cmdAsk(args: string[]): Promise<void> {
 }
 
 async function cmdNotify(): Promise<void> {
-  const { root, label, paneId } = ctx();
+  const c = caller();
+  const root = c.root;
   const raw = await readStdin();
   let payload: unknown;
   try {
@@ -389,24 +401,26 @@ async function cmdNotify(): Promise<void> {
       die(1, `这条通知有 ${err.problems.length} 处问题，没有发出去：\n  ${err.problems.join('\n  ')}`);
     throw err;
   }
-  const res = await request({ type: 'notify', root, label, paneId, payload });
+  const res = await request({ type: 'notify', caller: c, payload });
   finish(res, () => process.stdout.write('通知已发出（对方如果回消息，会作为指令注入到这个窗格）\n'));
 }
 
 /** Mirror one terminal reply into the project's group while the human is away. */
 async function cmdSay(args: string[]): Promise<void> {
-  const { root, label, paneId } = ctx();
+  const c = caller();
+  const root = c.root;
   const text = await readStdin();
   if (!text.trim()) die(1, '没有内容可发（从 stdin 读正文）');
-  const res = await request({ type: 'say', root, label, paneId, text, title: opt(args, 'title') });
+  const res = await request({ type: 'say', caller: c, text, title: opt(args, 'title') });
   finish(res, () => process.stdout.write('已同步到飞书群\n'));
 }
 
 async function cmdSendFile(args: string[]): Promise<void> {
-  const { root, label, paneId } = ctx();
+  const c = caller();
+  const root = c.root;
   const path = args.find((a) => !a.startsWith('--'));
   if (!path) die(1, '用法：herdr-lark send-file <路径> [--caption <说明>]');
-  const res = await request({ type: 'sendFile', root, label, paneId, path, caption: opt(args, 'caption') });
+  const res = await request({ type: 'sendFile', caller: c, path, caption: opt(args, 'caption') });
   finish(res, () => process.stdout.write('已发到项目群\n'));
 }
 
@@ -414,7 +428,8 @@ async function cmdSendFile(args: string[]): Promise<void> {
 
 async function cmdAway(args: string[]): Promise<void> {
   const sub = args.find((a) => !a.startsWith('--')) ?? 'status';
-  const { root, paneId } = ctx();
+  const c = caller();
+  const root = c.root;
   if (sub === 'status') {
     const state = readProjectState(root);
     if (flag(args, 'json')) {
@@ -430,26 +445,25 @@ async function cmdAway(args: string[]): Promise<void> {
     );
     return;
   }
-  if (sub !== 'on' && sub !== 'off') die(1, '用法：herdr-lark away on|off|status');
+  if (sub !== 'on' && sub !== 'off') die(1, '用法：herdr-lark away on|off|status [--all]');
   const away = sub === 'on';
+  // Asymmetric on purpose: you leave one task behind, but you come back as a
+  // whole person — `off` without --all only silences the session you are in,
+  // and the others keep buzzing your phone.
+  const all = flag(args, 'all');
   const idleFlag = args.includes('--idle');
-  if (away) {
+  if (away && !all) {
     // Everything the channel needs, in one command: credentials, a live
-    // daemon, and a group for this project. Asking the user to run three
+    // daemon, and a group for this session. Asking the user to run three
     // commands in order is how a channel ends up switched half-on.
     if (!resolveCreds()) die(4, '还没有飞书应用凭据。先跑一次：herdr-lark setup');
     const d = await startDaemonDetached();
     if (!d.ok) die(3, d.message);
     process.stdout.write(`${d.message}\n`);
-    const bindRes = await request({
-      type: 'bind',
-      root,
-      label: projectLabel(root),
-      paneId,
-    });
+    const bindRes = await request({ type: 'bind', caller: c });
     if (!bindRes.ok) die(bindRes.code, bindRes.message);
     if (bindRes.kind === 'bind') {
-      writeProjectState(root, { chatId: bindRes.chatId, paneId }, { create: true });
+      writeProjectState(root, { chatId: bindRes.chatId, paneId: c.paneId }, { create: true });
       process.stdout.write(
         bindRes.created
           ? `已新建飞书群「${bindRes.name}」\n`
@@ -462,16 +476,25 @@ async function cmdAway(args: string[]): Promise<void> {
     die(1, '--idle 后面要么不带值（默认 10 分钟），要么是正整数分钟');
   const res = await request({
     type: 'setAway',
-    root,
+    caller: c,
     away,
-    paneId,
+    all,
     notifyIdle: away ? idleFlag : false,
     idleMinMinutes: idleFlag ? idleMinutes : undefined,
   });
-  finish(res, () => {
-    writeProjectState(root, { away, paneId }, { create: true });
+  finish(res, (r) => {
+    if (all) {
+      const n = r.kind === 'ack' ? (r.count ?? 0) : 0;
+      process.stdout.write(
+        away
+          ? `已对全部 ${n} 个会话开启远程模式。\n`
+          : `已关闭全部 ${n} 个会话的远程模式——手机不会再收到任何推送。\n`,
+      );
+      return;
+    }
+    writeProjectState(root, { away, paneId: c.paneId }, { create: true });
     if (!away) {
-      process.stdout.write('远程模式已关闭。\n');
+      process.stdout.write('远程模式已关闭（只是这个会话；其他会话用 away off --all）。\n');
       return;
     }
     process.stdout.write(

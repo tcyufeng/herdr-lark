@@ -7,6 +7,7 @@ export type AgentStatus = 'idle' | 'working' | 'blocked' | 'done' | 'unknown';
 
 export interface AgentInfo {
   agent: string;
+  agent_session?: { value?: string };
   agent_status: AgentStatus;
   cwd: string;
   foreground_cwd?: string;
@@ -96,4 +97,41 @@ export function findPaneForProject(agents: AgentInfo[], root: string): string | 
   if (inProject.length === 0) return null;
   const focused = inProject.find((a) => a.focused);
   return (focused ?? inProject[0])!.pane_id;
+}
+
+/**
+ * Which pane is running this agent session right now. A pane can be moved,
+ * split off or renumbered while the session inside it keeps running, so the
+ * session id is the durable identity and the pane is looked up from it at the
+ * moment a message has to be delivered.
+ */
+export function findPaneForSession(agents: AgentInfo[], sessionId: string): string | null {
+  return agents.find((a) => a.agent_session?.value === sessionId)?.pane_id ?? null;
+}
+
+export interface SessionIdentity {
+  /** The agent session's own id — the lease holder. */
+  sessionId: string | null;
+  paneId: string | null;
+  /** Project root, kept for display and for grouping several sessions. */
+  root: string;
+  /** Short label: the project directory name. */
+  project: string;
+  /** What this session is working on, as the terminal title reports it. */
+  title: string | null;
+}
+
+/**
+ * Identify the session this command was run from. `HERDR_PANE_ID` tells us
+ * which pane we are in; herdr then tells us which agent session occupies it.
+ */
+export function identifySession(root: string, project: string): SessionIdentity {
+  const paneId = currentPaneId();
+  const id: SessionIdentity = { sessionId: null, paneId, root, project, title: null };
+  if (!paneId) return id;
+  const me = agentListSync().find((a) => a.pane_id === paneId);
+  if (!me) return id;
+  id.sessionId = me.agent_session?.value ?? null;
+  id.title = me.terminal_title_stripped?.trim() || null;
+  return id;
 }

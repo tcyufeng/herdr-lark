@@ -3,17 +3,29 @@ import { existsSync, unlinkSync } from 'node:fs';
 import { ensureHomeDir, sockPath } from './paths.js';
 
 /** Every request a thin client can make of the daemon. */
+/** Who is calling: the agent session, not just its directory. */
+export interface Caller {
+  key: string;
+  sessionId: string | null;
+  root: string;
+  /** Project directory name. */
+  project: string;
+  /** What this session is working on. */
+  task: string | null;
+  paneId: string | null;
+}
+
 export type Request =
   | { type: 'ping' }
   | { type: 'stop' }
   | { type: 'list' }
-  | { type: 'bind'; root: string; label: string; paneId: string | null; chatId?: string; name?: string }
-  | { type: 'unbind'; root: string }
-  | { type: 'setAway'; root: string; away: boolean; paneId: string | null; notifyIdle?: boolean; idleMinMinutes?: number }
-  | { type: 'ask'; root: string; label: string; paneId: string | null; payload: unknown; timeoutMs: number }
-  | { type: 'notify'; root: string; label: string; paneId: string | null; payload: unknown }
-  | { type: 'say'; root: string; label: string; paneId: string | null; text: string; title?: string }
-  | { type: 'sendFile'; root: string; label: string; paneId: string | null; path: string; caption?: string };
+  | { type: 'bind'; caller: Caller; chatId?: string; name?: string }
+  | { type: 'unbind'; caller: Caller }
+  | { type: 'setAway'; caller: Caller; away: boolean; all?: boolean; notifyIdle?: boolean; idleMinMinutes?: number }
+  | { type: 'ask'; caller: Caller; payload: unknown; timeoutMs: number }
+  | { type: 'notify'; caller: Caller; payload: unknown }
+  | { type: 'say'; caller: Caller; text: string; title?: string }
+  | { type: 'sendFile'; caller: Caller; path: string; caption?: string };
 
 export interface DaemonStatus {
   pid: number;
@@ -27,8 +39,8 @@ export type Response =
   | { ok: true; kind: 'pong'; status: DaemonStatus }
   | { ok: true; kind: 'ask'; reply: string; via: 'button' | 'text' }
   | { ok: true; kind: 'bind'; chatId: string; created: boolean; name: string }
-  | { ok: true; kind: 'list'; bindings: Array<{ root: string; label: string; chatId: string; paneId: string | null; away: boolean; notifyIdle: boolean; idleMinMinutes: number }> }
-  | { ok: true; kind: 'ack' }
+  | { ok: true; kind: 'list'; bindings: Array<{ key: string; root: string; label: string; task: string | null; chatId: string; paneId: string | null; away: boolean; notifyIdle: boolean; idleMinMinutes: number }> }
+  | { ok: true; kind: 'ack'; count?: number }
   /** code maps 1:1 onto the CLI exit code the client should use. */
   | { ok: false; code: 1 | 2 | 3 | 4; message: string };
 
