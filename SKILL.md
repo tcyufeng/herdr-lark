@@ -1,176 +1,186 @@
 ---
 name: herdr-lark
-description: 把 herdr 窗格里正在跑的 agent 会话接到飞书：要拍板的事推成一张带按钮的飞书卡片并阻塞等答复，答复原样回到 stdout；手机上发的消息注入回原窗格当作用户输入。还能往项目群发截图/文件，以及在 agent 卡住或干完时推通知。一个项目一个飞书群。
+description: Reach the agent session already running in a herdr pane from Feishu/Lark. Renders a decision into a card with buttons, pushes it to the human's phone, and blocks until the verdict comes back on stdout. Messages, images and voice notes the human sends from the phone are injected into that same pane as user input. Also mirrors terminal replies into the group, sends screenshots and files, and pushes when the agent is stuck. One project, one Feishu group.
 license: MIT
-compatibility: "Node >= 20.12。需要 herdr（注入回终端）和一个飞书自建应用（扫码创建，不用管理员审核）。仅在 macOS 上跑过。"
+compatibility: "Node >= 20.12. Needs herdr (to inject back into the terminal) and a Feishu/Lark custom app, created by scanning a QR code — no workspace-admin approval. Only exercised on macOS."
 ---
 
 # herdr-lark
 
-一条通道，不是一套策略。它把你的一个问题渲染成飞书卡片推到人的手机上，阻塞到人回答，
-把回答原样吐到 stdout。**什么时候该问人，是你（或你的规则）的事，这个 skill 不规定触发时机。**
+A channel, not a policy. It renders one question of yours into a Feishu card, pushes it to the human's
+phone, blocks until they answer, and prints the answer verbatim on stdout. **When to ask a human is your
+(or your caller's) decision — this skill defines no triggers.**
 
-下文 `herdr-lark` = 这个 skill 目录下的 `dist/cli.js`（已全局链接时可直接写 `herdr-lark`）。
+What makes it different from a chat bridge: the answer lands back in **the session that asked**, the one
+already running in a herdr pane with all of its context, rather than starting a new one.
 
-## 前提：一个项目一个群
+Every command below is `dist/cli.js` in this skill's directory. If it is not on your PATH yet, the human
+has to build it once — the skills CLI copies files but does not build:
 
-- 凭据是一个飞书自建应用（`setup` 扫码创建，**不需要企业管理员审核**），全局一份。
-- **每个项目绑一个飞书群**：`herdr-lark bind` 会新建一个群并把你拉进去。
-  之后这个项目的所有卡片都发在那个群里，你在那个群里说的话都回到这个项目的窗格。
-- 项目 = git toplevel，不在 git 里就是 cwd。worktree、submodule 各算一个项目。
-- 没 bind 过的项目调用 `ask` / `notify` 会得到退出码 4，照着 stderr 让用户跑一次 `bind`。
+```bash
+npm install && npm run build && ln -sf "$PWD/dist/cli.js" ~/.local/bin/herdr-lark
+```
 
-## 提问：`ask`
+## Before anything works
 
-用带引号的 heredoc 从 stdin 喂一个 JSON 对象（字段里有引号和换行，走 argv 会被撕碎）。
-**调用会阻塞**，直到人回答、超时，或通道故障。
+The human runs these two, once per machine and once per project:
+
+```bash
+herdr-lark setup                        # QR code in the terminal; they scan it with Feishu
+cd <project> && herdr-lark away on      # starts the daemon, creates this project's group
+```
+
+`away on` is the single entry point: it checks credentials, starts the resident daemon, creates (or
+reuses) a Feishu group for this project, and only then flips the switch. If any step fails it leaves
+the switch off rather than half-on.
+
+A project is the git toplevel (the cwd outside a repo). Calling `ask` or `notify` from a project that
+was never bound exits 4 — relay stderr and have the human run `away on` there.
+
+## Ask a question
+
+Feed one JSON object on stdin through a quoted heredoc — the fields contain quotes and line breaks, and
+argv would mangle them. **The call blocks** until the human answers, it times out, or the channel fails.
 
 ```bash
 ANSWER=$(herdr-lark ask <<'JSON'
 {
-  "title":       "scratch 目录用完删不删",
-  "doing":       "让需求助手在没有代码检出的情况下先跑起来",
-  "description": "之前助手要求本地必须有代码目录，这个限制去掉了，所以要决定它的临时子进程在没有检出时跑在哪。",
-  "blocker":     "没有代码目录，就没有一个天然的工作目录给那个子进程。",
+  "title":       "Keep or delete the scratch directory when no checkout exists",
+  "doing":       "Letting the requirements assistant run before the project code is checked out",
+  "description": "Until now the assistant required a local code directory. That restriction is lifted, so we must decide where its temporary subprocess runs when there is no checkout.",
+  "blocker":     "With no code directory there is no natural working directory for that subprocess.",
   "options": [
-    {"id": "keep", "label": "保留固定目录", "consequence": "一个项目一个目录。出问题有现场可看；代价是目录越攒越多没人清"},
-    {"id": "temp", "label": "用完即删",     "consequence": "干净，但崩溃后没有现场，排查只能靠日志"}
+    {"id": "keep", "label": "Keep a fixed directory", "consequence": "One directory per project. Leaves a scene to inspect after failures; the cost is directories piling up with nobody cleaning them"},
+    {"id": "temp", "label": "Delete after use",       "consequence": "Clean, but nothing is left to inspect after a crash; debugging relies on logs alone"}
   ],
   "recommend": "keep",
-  "reasoning": "倾向保留固定目录：走到这条路径的用户本来最可能环境是坏的，留个现场值。最强反对：磁盘上垃圾目录会累积。",
-  "question":  "保留固定目录，还是用完即删？",
-  "lang":      "zh"
+  "reasoning": "Keep a fixed directory: users on this path are the ones most likely to have a broken setup, so a scene is worth having. Strongest objection: disk clutter accumulates.",
+  "question":  "Keep a fixed directory, or delete after use?",
+  "lang":      "en"
 }
 JSON
 )
 rc=$?
 ```
 
-### 字段
+### The field contract
 
-| 字段 | 写什么 |
+| field | what to write |
 |---|---|
-| `title` | 一行。手机通知栏只看得到标题和一两行正文，钩子放这儿 |
-| `doing` | 一句话：这是哪个任务 |
-| `description` | 给**没看过任何过程**的人的背景：怎么走到这一步、涉及什么、术语当场解释 |
-| `blocker` | 到底什么卡住了 |
-| `options[]` | 2–5 项 `{id, label, consequence}`；`consequence` 写真实后果和代价，不是代号 |
-| `options[].danger` | 可选。不可逆/高代价 → 渲染成**红色按钮 + 二次确认弹窗**。**推荐项不允许是 danger 项**，校验会直接拦下 |
-| `recommend` | 某个 option 的 `id` |
-| `reasoning` | 你的倾向 **加上最强的反对意见** |
-| `question` | 一句话能回答的问题 |
-| `lang` | 可选，`zh` / `en`，只控制固定文案（小标题、提示语）。**按你回复用户的语言填**；非法值直接拒 |
+| `title` | One line. The phone's notification shade shows the title and a line or two of body, so put the hook here |
+| `doing` | One sentence: which task this is |
+| `description` | Background for someone who has seen none of the work: why you got here, what is involved, jargon explained on the spot |
+| `blocker` | Exactly what is blocked |
+| `options[]` | 2 to 5 items of `{id, label, consequence}`; `consequence` states the real outcome and its cost, not a code name |
+| `options[].danger` | Optional. Irreversible or high-cost → red button behind a native confirm dialog. **The recommendation may never be a danger option** — validation refuses it outright |
+| `recommend` | The `id` of one option |
+| `reasoning` | Why you lean that way **plus the strongest objection** |
+| `question` | One question answerable in one sentence |
+| `lang` | Optional, `zh` or `en`: the language of the fixed wording (section labels, hints). Pass the language you reply to the user in |
 
-内容字段用你的工作语言写。校验在本地跑，**发之前**一次报出所有问题，退出码 1，什么都不会发出去。
+Write the content fields in whatever language you work in; only `lang` controls the wrapper. Validation
+runs locally **before anything is sent** and reports every problem at once (exit 1, nothing sent).
 
-### 拿回什么
+### What comes back
 
-- 退出码 0：stdout 就是答复，原样，末尾一个换行（`$(…)` 会吃掉）。
-- **点按钮返回那个选项的 `label` 文本**，不是 `id`；自己打字就是原话。按 label 匹配，并且要能接住任何别的内容。
-- 卡片会被原地改写成 `✅ …已回答`，顶部带上你的回复。超时/取消同理，按钮消失。
-- 默认等 12 小时（`--timeout <秒>` 改）。飞书消息长期留存，可以设更长。
-- **一个项目同时只能挂一个问题**：第二个 `ask` 直接退 4。
+- Exit 0: stdout is the reply, verbatim, plus a trailing newline.
+- **A button tap returns that option's `label` text**, not its `id`; free typing returns exactly what the
+  human typed. Match on the label, and be ready for anything else.
+- The card is rewritten in place to `✅ … Answered` with the reply on top. **Buttons lock on the first
+  tap** — the closed card rides back on the tap's own callback, so a second tap is not possible.
+- Default wait is 12 hours (`--timeout <seconds>`). Feishu keeps history indefinitely, so longer works.
+- **One pending question per project.** A second `ask` exits 4.
 
-### ⚠️ 当心你自己的工具超时
+### ⚠️ Mind your own tool timeout
 
-如果你的 harness 会在 `ask` 返回前杀掉它（Claude Code 的 Bash 工具是 10 分钟），daemon 会把卡片
-改成「⚠️ 已取消」，你拿不到退出码，人在手机上看到一张死卡。两条路，选一条：
+If your harness kills `ask` before it returns (most shell tools cap a command at minutes), the daemon
+cancels the card and the human finds a dead question. Either set `--timeout` at or below your harness
+limit and treat exit 2 as a normal outcome, or:
 
-- `--timeout` 设到你的工具上限以内，把退出码 2 当正常结果处理；或者
-- **把 `ask` 放后台跑，stdout / stderr 重定向到文件**，收到完成通知再读文件取答复和退出码。
+**Run `ask` as a background job of your harness** (in Claude Code, the Bash tool's `run_in_background`),
+so it wakes you when the answer lands. A bare `nohup … &` is invisible to the harness: the answer lands
+silently in a file, nobody tells you, and the human thinks you got it while you are still waiting.
 
-  ⚠️ 必须用**你的 harness 自己的后台机制**（Claude Code 是 Bash 工具的 `run_in_background`），
-  这样任务结束时它会主动叫醒你。用 `nohup … &` 这种裸后台进程 harness 追踪不到：
-  答复会安安静静落到文件里，没有任何人通知你，人在手机上以为你收到了，其实你还在等。
+## Mirror every reply: `say`
 
-## 单向通知：`notify`
-
-```bash
-herdr-lark notify <<'JSON'
-{"title": "测试全绿，开始迁移", "body": "三个 CI runner 全部通过。\n\n下一步：**staging 库的 schema 迁移**，约 10 分钟。", "lang": "zh"}
-JSON
-```
-
-- `title` / `body` 必填，`body` 可以用飞书的 markdown（**粗体**、换行）。没有按钮，不会被改写。
-- **不要拿它当进度条刷。** 只给重大事项：任务完成 / 出了异常 / 任务进行不下去了。
-  日常的对话回复走 `say`，不要用 notify——每张卡都带标题栏，刷起来像告警。
-- 允许在一个问题挂着的时候发，所以可以「边等裁决边报进度」。
-- 要拍板的事永远走 `ask`，不要用 notify 代替。
-
-## 把每次回复同步过去：`say`
-
-远程模式开着时，人看不到终端。**你在终端说的每一句话，都要同时 `say` 一份到飞书**，
-否则通道是单向的——他能发给你，却看不到你的回答。
+While remote mode is on, the human cannot see the terminal. **Every reply you write there must also be
+`say`-ed**, or the channel is one-way: they can send to you but never see your answers.
 
 ```bash
-herdr-lark say <<'EOF'
-**改完了**：凭据层现在五层解析，Windows 用 DPAPI。
-
-顺手修了两个 bug：IPC 帧抢 `kind` 字段导致 ping 失败；CLI 被 `| head` 截断时 EPIPE 崩栈。
+herdr-lark say --title "One line that carries information" <<'EOF'
+The reply, in markdown. Tables, lists and fenced code blocks all render.
 EOF
 ```
 
-- **逐字同步：发过去的必须和你在终端说的一字不差。** 不要"为手机精简"——人没法验证被删掉的是什么，
-  只能猜你在终端是不是多说了。你觉得太长，那是该在终端就写短，不是该给他一份删节版。
-- 卡片用的是飞书卡片 JSON 2.0 的 `markdown` 组件，**表格、有序/无序列表、代码块都能正常渲染**
-  （1.0 的 `lark_md` 只是内联格式标签，这些一个都不支持——别被这个命名坑到）。所以没有任何格式
-  理由需要改写。
-- `--title` 是**额外**加的一句概括，不替换正文，也不算改写：手机通知栏只看得到标题，所以这句得有
-  信息量，不能是"回复"两个字。
-- 和 `notify` 的分工：`say` = 把终端里的话原样搬过去（每次回复都发）；`notify` = 带标题的卡片，
-  只给重大事项（任务完成 / 出了异常 / 进行不下去了）。
-- 和 `ask` 的分工：要人拍板的永远走 `ask`，别用 `say` 把问题混在正文里——那样没有按钮，
-  也不会阻塞等答复。
+- **Verbatim. Do not condense for the phone.** The human cannot verify what you cut and is left guessing
+  whether the terminal held more. If it is too long, write shorter in the terminal — never ship them an
+  abridged copy.
+- Cards use Feishu card JSON 2.0's `markdown` component, so there is no formatting reason to rewrite.
+- `--title` is *added*, not substituted: the phone's notification shade shows only the title, so make
+  that line carry information — never "reply".
 
-## 发文件和截图：`send-file`
+## Notify and files
 
 ```bash
-herdr-lark send-file /path/to/shot.png --caption "现在的版式，你看行不行"
+herdr-lark notify <<'JSON'
+{"title": "Tests green, starting the migration", "body": "All three CI runners pass.\n\nNext: **schema migration** on staging, about 10 minutes."}
+JSON
+
+herdr-lark send-file ./shot.png --caption "Current layout"
 ```
 
-图片（png/jpg/gif/webp/bmp）发成图片消息，其余发成文件。需要人确认版式、想让人看 diff 或产物时用。
-**不要为了让人验证某个改动单发一张卡**——把它塞进下一张本来就要发的真问题里。
+`notify` is for things that matter but need no answer — finished, crashed, blocked and giving up. Not a
+progress bar: every card buzzes a phone. Day-to-day replies go through `say`; decisions always through `ask`.
 
-## 手机上发来的消息
+`send-file` only reads files inside the calling project, the daemon's media directory, or a temp dir
+(checked after `realpath`, so symlinks cannot escape). Do not send a card just to have a change verified
+— fold it into the next real question.
 
-人在群里发的消息，如果这个项目正挂着一个问题，**那条消息就是答复**；否则原样注入回这个项目的
-herdr 窗格，前缀 `[herdr-lark remote] `。前缀是协议，后面的文字是用户的原话——**当成用户在键盘上打的处理**。
-带图片或文件的消息会先存到本机，路径附在注入的文本里——**图片你能直接读**。
-语音消息会经飞书的语音识别转成文字再注入；转不了时你会看到一句明确的说明（多半是应用缺
-`speech_to_text:speech` 权限，让用户跑 `herdr-lark setup --update` 补），**而不是一个你读不懂的
-`<audio/>` 占位符**。
+## Messages from the phone
 
-注入失败（agent 正卡在一个要人确认的提示上、窗格没了）时，人会在群里收到一张回执卡；你什么都看不到。
+Anything the human sends in the group is injected into that project's pane as
+`[herdr-lark remote] <their text>`. The prefix is protocol; the rest is the user speaking — **treat it
+exactly like input typed at the keyboard**.
 
-**看到这个前缀就说明人在手机上**：照常在终端回答，同时用 `say` 把同一个答复同步过去。
+Images and files are downloaded locally first and their paths appended, so you can open them. Voice notes
+are transcribed; if transcription fails you get a plain sentence saying so, never an unreadable
+`<audio/>` placeholder.
 
-## 退出码
+**Seeing the prefix means the human is on their phone**: answer in the terminal as usual, and `say` the
+same answer so it reaches them.
 
-| rc | 含义 | 发出去了吗 | 怎么办 |
+## Exit codes
+
+| rc | meaning | sent? | what to do |
 |---|---|---|---|
-| 0 | 拿到答复，在 stdout | 是 | 继续 |
-| 1 | 输入被拒，stderr 列出每一处问题 | **否** | 改 JSON 重发 |
-| 2 | 超时没人回答 | 是 | 可逆的事按推荐项继续并记「未获确认」；不可逆的停下等人 |
-| 3 | 通道故障（daemon 没跑、连接断、发送失败） | 看 stderr | 起 daemon 重试一次，仍然 3 就停下并告诉用户 |
-| 4 | 需要人动手（没 bind、已有问题挂着） | 否 | 把 stderr 原样转告用户，然后重试 |
+| 0 | Reply received; stdout has it | yes | continue |
+| 1 | Input rejected; stderr lists every problem | **no** | fix the JSON and call again |
+| 2 | No reply within the timeout | yes | reversible work: proceed with the recommendation and record "not confirmed". Irreversible: stop and wait |
+| 3 | Channel failure (daemon down, send failed) | see stderr | start the daemon and retry once; still 3 → stop and tell the user |
+| 4 | A human must act (not bound, question already pending) | no | relay stderr, then retry |
 
-## daemon
+## The daemon
 
-一个常驻进程独占飞书长连接，`ask` / `notify` 只跟它走本地 socket。它没跑，这些命令退 3。
+One resident process owns the Feishu WebSocket; the commands above only talk to it over a local socket.
 
-- 起：`herdr-lark daemon --detach`（脱离终端，日志 `~/.herdr-lark/daemon.log`）
-- 查：`herdr-lark daemon --status` · 停：`herdr-lark daemon --stop`
-- **绝不要用你自己的后台作业 / Monitor / 子 agent 去起它**：它跟着你一起死，之后人发的每条消息都会静默丢掉。
+- Start: `herdr-lark daemon --detach` · Check: `--status` · Stop: `--stop`
+- **Never start it as a background job of your own shell, a monitor, or a subagent.** It dies with you,
+  and every message the human sends afterwards is lost silently.
+- `--stop` refuses while questions are pending (they would become dead cards); `--force` overrides.
 
-## 远程模式
+## Remote mode
 
-`herdr-lark away on` 打开后，daemon 会在这个项目的 agent **卡住等输入**或**干完一轮**时往群里推一张状态卡
-（有问题挂着时不推，60 秒内不重复推）。关掉：`away off`。开关记在 `<项目根>/.herdr-lark/state.json`，
-用 `herdr-lark away status --json` 读。
+`herdr-lark away on` / `off`, read with `away status --json`. While on, the daemon pushes a card when the
+agent is **stuck on a prompt only the human can answer**. "Finished" is off by default — it fires at the
+end of every turn and is pure noise while they are at the keyboard; `away on --idle 30` enables it for
+turns that ran at least 30 minutes.
 
-**远程模式只换通道，不降标准**：不可逆动作仍然要明确批准，超时不算批准。
+**Remote mode changes the channel, not the standard**: irreversible actions still need explicit approval,
+and a timeout is not approval.
 
-## 收尾
+## Wrapping up
 
-- 任务结束跑 `herdr-lark unbind` 解绑（飞书群留着，要不要归档是人的事）。
-- `herdr-lark status` 看 daemon、凭据位置和所有绑定。
+`herdr-lark unbind` when the work is done (the Feishu group stays; archiving it is the human's call).
+`herdr-lark status` shows the daemon, where credentials came from, and every binding.
+
+中文文档：[docs/guide.zh-CN.md](docs/guide.zh-CN.md) · [README.zh-CN.md](README.zh-CN.md)
