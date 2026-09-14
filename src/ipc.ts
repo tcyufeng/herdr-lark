@@ -12,6 +12,7 @@ export type Request =
   | { type: 'setAway'; root: string; away: boolean; paneId: string | null; notifyIdle?: boolean; idleMinMinutes?: number }
   | { type: 'ask'; root: string; label: string; paneId: string | null; payload: unknown; timeoutMs: number }
   | { type: 'notify'; root: string; label: string; paneId: string | null; payload: unknown }
+  | { type: 'say'; root: string; label: string; paneId: string | null; text: string; title?: string }
   | { type: 'sendFile'; root: string; label: string; paneId: string | null; path: string; caption?: string };
 
 export interface DaemonStatus {

@@ -24,11 +24,12 @@ const HELP = `herdr-lark — 把 herdr 里跑着的 agent 会话接到飞书
 
   setup [--update] [--scopes a,b]  扫码创建/更新飞书应用，凭据存进钥匙串
   setup --app-id cli_xxx [--store]  用已有应用；secret 从环境变量/env 文件读，绝不走 argv
-  daemon [--detach|--status|--stop]  常驻进程：连飞书长连接，收发消息
+  daemon [--detach|--status|--stop]  常驻进程：连飞书长连接（有问题挂着时 --stop 会被拦，除非 --force）
   bind [--chat <id>] [--name <名>]   把当前项目绑到一个飞书群（默认新建一个）
   unbind                             解绑当前项目
   ask [--timeout <秒>]               stdin 读 JSON，推一张提问卡，阻塞等答复
-  notify                             stdin 读 JSON，推一条单向通知
+  notify                             stdin 读 JSON，推一条带标题的通知卡（重大事项）
+  say [--title <一句话>]             stdin 读 markdown，把终端回复同步到群（远程模式下每次回复都发）
   send-file <路径> [--caption <说明>] 把图片或文件发到项目群
   away on [--idle [分钟]] | off | status   远程模式；默认只推「卡住了」，不推「干完了」
   status                             daemon 与绑定概览
@@ -232,6 +233,33 @@ async function cmdSetup(args: string[]): Promise<void> {
 
 // ---------------------------------------------------------------- daemon
 
+/** Is a daemon already answering on the socket? */
+async function daemonAlive(): Promise<boolean> {
+  if (!isDaemonListening()) return false;
+  const probe = await request({ type: 'ping' }, { timeoutMs: 2000 });
+  return probe.ok;
+}
+
+/**
+ * Start the daemon in its own session. It must outlive the caller: started as
+ * a child of a shell command it would die with it, and every message the human
+ * sends afterwards would be lost with no error on their side.
+ */
+async function startDaemonDetached(): Promise<{ ok: boolean; message: string }> {
+  if (await daemonAlive()) return { ok: true, message: 'daemon 已经在跑了' };
+  ensureHomeDir();
+  const out = openSync(logPath(), 'a');
+  const self = fileURLToPath(import.meta.url);
+  const child = spawn(process.execPath, [self, 'daemon'], { detached: true, stdio: ['ignore', out, out] });
+  child.unref();
+  for (let i = 0; i < 20; i++) {
+    await new Promise((r) => setTimeout(r, 500));
+    if (await daemonAlive()) return { ok: true, message: `daemon: 已在后台启动，pid ${child.pid}（日志 ${logPath()}）` };
+  }
+  return { ok: false, message: `daemon 起来了但 10 秒内没应答，看日志：${logPath()}` };
+}
+
+
 async function cmdDaemon(args: string[]): Promise<void> {
   if (flag(args, 'status')) {
     if (!isDaemonListening()) die(1, 'daemon: 没在跑');
@@ -250,6 +278,17 @@ async function cmdDaemon(args: string[]): Promise<void> {
       process.stdout.write('daemon: 本来就没在跑\n');
       return;
     }
+    // Stopping cancels every waiting question, which leaves a dead card on
+    // someone's phone. Refuse unless the caller says that is what they want.
+    if (!flag(args, 'force')) {
+      const probe = await request({ type: 'ping' }, { timeoutMs: 5000 });
+      if (probe.ok && probe.kind === 'pong' && probe.status.pendingAsks > 0)
+        die(
+          4,
+          `还有 ${probe.status.pendingAsks} 个问题挂在手机上。现在停 daemon 会把这些卡片变成「⚠️ 已取消」，` +
+            '人看到的是一张死卡。\n先等回答，或者明知故犯：herdr-lark daemon --stop --force',
+        );
+    }
     const res = await request({ type: 'stop' }, { timeoutMs: 5000 });
     if (!res.ok) die(3, res.message);
     for (let i = 0; i < 60; i++) {
@@ -260,29 +299,10 @@ async function cmdDaemon(args: string[]): Promise<void> {
     return;
   }
   if (flag(args, 'detach')) {
-    if (isDaemonListening()) {
-      const probe = await request({ type: 'ping' }, { timeoutMs: 2000 });
-      if (probe.ok) die(3, 'daemon 已经在跑了');
-    }
-    ensureHomeDir();
-    const out = openSync(logPath(), 'a');
-    const self = fileURLToPath(import.meta.url);
-    const child = spawn(process.execPath, [self, 'daemon'], {
-      detached: true,
-      stdio: ['ignore', out, out],
-    });
-    child.unref();
-    for (let i = 0; i < 20; i++) {
-      await new Promise((r) => setTimeout(r, 500));
-      if (isDaemonListening()) {
-        const probe = await request({ type: 'ping' }, { timeoutMs: 2000 });
-        if (probe.ok) {
-          process.stdout.write(`daemon: 已在后台启动，pid ${child.pid}（日志 ${logPath()}）\n`);
-          return;
-        }
-      }
-    }
-    die(3, `daemon 起来了但 10 秒内没应答，看日志：${logPath()}`);
+    const r = await startDaemonDetached();
+    if (!r.ok) die(3, r.message);
+    process.stdout.write(`${r.message}\n`);
+    return;
   }
   const { runDaemon } = await import('./daemon.js');
   await runDaemon();
@@ -371,6 +391,15 @@ async function cmdNotify(): Promise<void> {
   finish(res, () => process.stdout.write('通知已发出（对方如果回消息，会作为指令注入到这个窗格）\n'));
 }
 
+/** Mirror one terminal reply into the project's group while the human is away. */
+async function cmdSay(args: string[]): Promise<void> {
+  const { root, label, paneId } = ctx();
+  const text = await readStdin();
+  if (!text.trim()) die(1, '没有内容可发（从 stdin 读正文）');
+  const res = await request({ type: 'say', root, label, paneId, text, title: opt(args, 'title') });
+  finish(res, () => process.stdout.write('已同步到飞书群\n'));
+}
+
 async function cmdSendFile(args: string[]): Promise<void> {
   const { root, label, paneId } = ctx();
   const path = args.find((a) => !a.startsWith('--'));
@@ -402,6 +431,30 @@ async function cmdAway(args: string[]): Promise<void> {
   if (sub !== 'on' && sub !== 'off') die(1, '用法：herdr-lark away on|off|status');
   const away = sub === 'on';
   const idleFlag = args.includes('--idle');
+  if (away) {
+    // Everything the channel needs, in one command: credentials, a live
+    // daemon, and a group for this project. Asking the user to run three
+    // commands in order is how a channel ends up switched half-on.
+    if (!resolveCreds()) die(4, '还没有飞书应用凭据。先跑一次：herdr-lark setup');
+    const d = await startDaemonDetached();
+    if (!d.ok) die(3, d.message);
+    process.stdout.write(`${d.message}\n`);
+    const bindRes = await request({
+      type: 'bind',
+      root,
+      label: projectLabel(root),
+      paneId,
+    });
+    if (!bindRes.ok) die(bindRes.code, bindRes.message);
+    if (bindRes.kind === 'bind') {
+      writeProjectState(root, { chatId: bindRes.chatId, paneId }, { create: true });
+      process.stdout.write(
+        bindRes.created
+          ? `已新建飞书群「${bindRes.name}」\n`
+          : `已连到飞书群「${bindRes.name}」\n`,
+      );
+    }
+  }
   const idleMinutes = Number(opt(args, 'idle') ?? 10);
   if (idleFlag && (!Number.isFinite(idleMinutes) || idleMinutes <= 0))
     die(1, '--idle 后面要么不带值（默认 10 分钟），要么是正整数分钟');
@@ -471,6 +524,8 @@ async function main(): Promise<void> {
       return cmdAsk(args);
     case 'notify':
       return cmdNotify();
+    case 'say':
+      return cmdSay(args);
     case 'send-file':
       return cmdSendFile(args);
     case 'away':

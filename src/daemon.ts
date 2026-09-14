@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import type { Server } from 'node:net';
 import { createLarkChannel, type CardActionEvent, type LarkChannel, type NormalizedMessage } from '@larksuite/channel';
 import { BindingStore, type Binding } from './bindings.js';
-import { askCard, notifyCard, receiptCard, statusCard } from './cards.js';
+import { askCard, notifyCard, receiptCard, sayCard, statusCard } from './cards.js';
 import { resolveCreds } from './creds.js';
 import { agentList, findPaneForProject, promptPane } from './herdr.js';
 import { serve, type Request, type Response } from './ipc.js';
@@ -402,6 +402,38 @@ export async function runDaemon(): Promise<void> {
             bindings.touch(req.root, { paneId: req.paneId, label: req.label });
             return { ok: true, kind: 'bind', chatId: existing.chatId, created: false, name: existing.label };
           }
+          // No local binding — but the group may already exist from an earlier
+          // install whose bindings.json is gone. Creating a second group for
+          // the same project would split the conversation in two, so look for
+          // one the bot made for exactly this project root before creating.
+          const marker = `herdr-lark · ${req.root}`;
+          try {
+            for (const summary of await channel.listChats()) {
+              let info;
+              try {
+                info = await channel.getChatInfo(summary.id);
+              } catch {
+                continue;
+              }
+              if (info.description !== marker) continue;
+              const b: Binding = {
+                root: req.root,
+                label: req.label,
+                chatId: summary.id,
+                paneId: req.paneId,
+                away: false,
+                notifyIdle: false,
+                idleMinMinutes: 10,
+                boundAt: new Date().toISOString(),
+              };
+              bindings.set(b);
+              refreshPolicy();
+              log('bind.reused', { root: req.root, chatId: summary.id });
+              return { ok: true, kind: 'bind', chatId: summary.id, created: false, name: summary.name };
+            }
+          } catch (err) {
+            log('bind.scan-failed', { root: req.root, err: String(err) });
+          }
           const owner = creds.ownerOpenId;
           if (!owner) {
             return {
@@ -483,6 +515,20 @@ export async function runDaemon(): Promise<void> {
           try {
             await channel.send(b.chatId, { card: notifyCard(payload, b.label) });
             log('notify.sent', { root: b.root });
+            return { ok: true, kind: 'ack' };
+          } catch (err) {
+            return { ok: false, code: 3, message: `发送失败：${err instanceof Error ? err.message : String(err)}` };
+          }
+        }
+
+        case 'say': {
+          const b = bindings.touch(req.root, { paneId: req.paneId, label: req.label });
+          if (!b) return { ok: false, code: 4, message: '这个项目还没 bind，先跑 herdr-lark away on' };
+          const text = req.text.trim();
+          if (!text) return { ok: false, code: 1, message: '没有内容可发' };
+          try {
+            await channel.send(b.chatId, { card: sayCard(text, b.label, req.title) });
+            log('say.sent', { root: b.root, chars: text.length });
             return { ok: true, kind: 'ack' };
           } catch (err) {
             return { ok: false, code: 3, message: `发送失败：${err instanceof Error ? err.message : String(err)}` };
