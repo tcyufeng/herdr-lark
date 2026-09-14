@@ -135,8 +135,21 @@ export async function runDaemon(): Promise<void> {
     return undefined;
   };
 
-  /** Close a question: rewrite the card, hand the reply back to the client. */
-  const answer = async (p: Pending, reply: string, via: 'button' | 'text'): Promise<void> => {
+  /**
+   * Close a question: rewrite the card, hand the reply back to the client.
+   *
+   * `viaCallback` means the tap's own callback response already carries the
+   * answered card, so the buttons are gone the moment Feishu renders the
+   * reply — no window in which a second tap is possible. The REST update is
+   * still issued as a fallback: if the callback response were ever dropped,
+   * a card with live buttons on an already-closed question would be worse
+   * than a redundant update.
+   */
+  const answer = async (
+    p: Pending,
+    reply: string,
+    via: 'button' | 'text',
+  ): Promise<void> => {
     if (p.done) return;
     p.done = true;
     clearTimeout(p.timer);
@@ -260,8 +273,21 @@ export async function runDaemon(): Promise<void> {
     }
     const opt = p.payload.options.find((o) => o.id === value.optionId);
     if (!opt) return { toast: { type: 'error', content: '这个选项对不上，再试一次' } };
+    // Build the closed card before answering, so it can ride back on this very
+    // callback: Feishu swaps the card in the same round trip and the buttons
+    // are gone before a second tap is possible.
+    const closed = askCard({
+      payload: p.payload,
+      projectLabel: p.label,
+      reqId: p.reqId,
+      state: 'answered',
+      reply: opt.label,
+    });
     await answer(p, opt.label, 'button');
-    return { toast: { type: 'success', content: '已回复' } };
+    return {
+      toast: { type: 'success', content: '已回复' },
+      card: { type: 'raw', data: closed },
+    };
   });
 
   channel.on('error', (err) => log('channel.error', { code: err.code, message: err.message }));
