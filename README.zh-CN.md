@@ -57,11 +57,20 @@ cp .agents/skills/herdr-lark/examples/remote-mode-rule.md ~/.claude/rules/
 | 你说 | agent 执行 |
 |---|---|
 | 「我走了」「有事发手机」 | `herdr-lark away on` |
-| 「我回来了」 | `herdr-lark away off` |
+| 「我回来了」 | `herdr-lark away off --all` |
 
 远程模式开着时，它在终端写的每一句回复都会**逐字**同步到群里，要你拍板的事推成带按钮的卡片，它卡在只有你能回答的提示上时也会推给你。
 
-想用斜杠命令的话，把 `examples/away.md` 和 `examples/back.md` 拷进 `~/.claude/commands/`，就有了 `/away` 和 `/back`。
+想用斜杠命令的话，全部拷进去 —— 它们共用前缀，打 `/away` 就会把整组列出来供选择：
+
+```bash
+cp .agents/skills/herdr-lark/examples/commands/*.md ~/.claude/commands/
+```
+
+`/away-on` · `/away-on-all` · `/away-off` · `/away-off-all` · `/away-status`
+
+**开是局部的，关是全局的**：开只管你当前这个会话；而「我回来了」说的是这个人回来了，
+所以关要带 `--all`（或用 `/away-off-all`），否则别的会话还会继续往你手机推。
 
 ## 手机通知不响？
 

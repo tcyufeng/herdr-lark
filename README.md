@@ -59,11 +59,20 @@ cp .agents/skills/herdr-lark/examples/remote-mode-rule.md ~/.claude/rules/
 | You say | The agent runs |
 |---|---|
 | "I'm heading out", "reach me on my phone" | `herdr-lark away on` |
-| "I'm back" | `herdr-lark away off` |
+| "I'm back" | `herdr-lark away off --all` |
 
 While remote mode is on, every reply it writes in the terminal is mirrored **verbatim** into the group, decisions arrive as cards with buttons, and you get a push when the agent is stuck on a prompt only you can answer.
 
-Prefer slash commands? Copy `examples/away.md` and `examples/back.md` into `~/.claude/commands/` for `/away` and `/back`.
+Prefer slash commands? Copy them all in — they share a prefix, so typing `/away` lists the set:
+
+```bash
+cp .agents/skills/herdr-lark/examples/commands/*.md ~/.claude/commands/
+```
+
+`/away-on` · `/away-on-all` · `/away-off` · `/away-off-all` · `/away-status`
+
+Turning it on covers the session you are in; `--all` (and `/away-off-all`) covers every bound session,
+because someone who says "I'm back" is back as a person, not back in one directory.
 
 ## No notification on your phone?
 
