@@ -17,6 +17,15 @@ const POLL_MS = 5_000;
 const STATUS_COOLDOWN_MS = 60_000;
 /** How long the subscription may be down before the groups are told. */
 const LINK_ALERT_AFTER_MS = 90_000;
+/**
+ * How long a non-connected subscription is tolerated before forcing a fresh
+ * connection. The SDK reconnects on a socket it *notices* has dropped, but a
+ * half-open one — the laptop slept, the network moved, a NAT dropped the
+ * mapping — still looks alive to it, so it never fires and the link stays
+ * silent indefinitely. Observed once: eight hours across a night, with no
+ * `reconnecting` event at all.
+ */
+const LINK_FORCE_RECONNECT_AFTER_MS = 60_000;
 
 /** The log records ids and state transitions only — never message bodies. */
 function log(event: string, detail: Record<string, unknown> = {}): void {
@@ -482,6 +491,30 @@ export async function runDaemon(): Promise<void> {
   // normally and has no way to know their own messages are going nowhere.
   let downSince = 0;
   let alerted = false;
+  let lastForcedAt = 0;
+  let reconnecting = false;
+
+  /** Tear the subscription down and build a new one. */
+  const forceReconnect = async (): Promise<void> => {
+    if (reconnecting) return;
+    reconnecting = true;
+    lastForcedAt = Date.now();
+    log('link.forcing-reconnect', { downForSec: Math.round((Date.now() - downSince) / 1000) });
+    try {
+      await channel.disconnect();
+    } catch (err) {
+      log('link.disconnect-failed', { err: String(err).slice(0, 120) });
+    }
+    try {
+      await channel.connect();
+      log('link.reconnect-attempted', { state: channel.getConnectionStatus()?.state });
+    } catch (err) {
+      log('link.reconnect-failed', { err: String(err).slice(0, 120) });
+    } finally {
+      reconnecting = false;
+    }
+  };
+
   const checkLink = async (): Promise<void> => {
     const state = channel.getConnectionStatus()?.state;
     const healthy = state === 'connected';
@@ -504,7 +537,12 @@ export async function runDaemon(): Promise<void> {
       return;
     }
     if (!downSince) downSince = Date.now();
-    if (alerted || Date.now() - downSince < LINK_ALERT_AFTER_MS) return;
+    const down = Date.now() - downSince;
+    // Rebuild the connection ourselves. Waiting for the SDK is not enough: it
+    // only reconnects sockets it knows are dead.
+    if (down > LINK_FORCE_RECONNECT_AFTER_MS && Date.now() - lastForcedAt > LINK_FORCE_RECONNECT_AFTER_MS)
+      void forceReconnect();
+    if (alerted || down < LINK_ALERT_AFTER_MS) return;
     alerted = true;
     log('link.down', { state });
     for (const b of bindings.all().filter((x) => x.away)) {

@@ -180,8 +180,9 @@ One resident process owns the Feishu WebSocket; the commands above only talk to 
 - `--status` prints the subscription state. **`connected` is the only healthy one**: sending goes out
   over REST and keeps working while the WebSocket is down, so a half-dead channel still delivers your
   replies to the phone while everything the human sends disappears. The daemon now announces that
-  itself — after 90 s down it pushes a card to every group with remote mode on, and another when the
-  link returns — but if messages from the phone stop arriving, check this first.
+  itself — after 60 s down it tears the subscription down and builds a new one, after 90 s it pushes a
+  card to every group with remote mode on, and it pushes another when the link returns — but if
+  messages from the phone stop arriving, check this first.
 - **Never start it as a background job of your own shell, a monitor, or a subagent.** It dies with you,
   and every message the human sends afterwards is lost silently.
 - `--stop` refuses while questions are pending (they would become dead cards); `--force` overrides.

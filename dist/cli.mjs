@@ -137544,6 +137544,27 @@ ${list}`;
   };
   let downSince = 0;
   let alerted = false;
+  let lastForcedAt = 0;
+  let reconnecting = false;
+  const forceReconnect = async () => {
+    if (reconnecting) return;
+    reconnecting = true;
+    lastForcedAt = Date.now();
+    log("link.forcing-reconnect", { downForSec: Math.round((Date.now() - downSince) / 1e3) });
+    try {
+      await channel.disconnect();
+    } catch (err) {
+      log("link.disconnect-failed", { err: String(err).slice(0, 120) });
+    }
+    try {
+      await channel.connect();
+      log("link.reconnect-attempted", { state: channel.getConnectionStatus()?.state });
+    } catch (err) {
+      log("link.reconnect-failed", { err: String(err).slice(0, 120) });
+    } finally {
+      reconnecting = false;
+    }
+  };
   const checkLink = async () => {
     const state = channel.getConnectionStatus()?.state;
     const healthy = state === "connected";
@@ -137565,7 +137586,10 @@ ${list}`;
       return;
     }
     if (!downSince) downSince = Date.now();
-    if (alerted || Date.now() - downSince < LINK_ALERT_AFTER_MS) return;
+    const down = Date.now() - downSince;
+    if (down > LINK_FORCE_RECONNECT_AFTER_MS && Date.now() - lastForcedAt > LINK_FORCE_RECONNECT_AFTER_MS)
+      void forceReconnect();
+    if (alerted || down < LINK_ALERT_AFTER_MS) return;
     alerted = true;
     log("link.down", { state });
     for (const b of bindings.all().filter((x) => x.away)) {
@@ -137923,7 +137947,7 @@ ${list}`;
     process.on(sig, () => void shutdown(sig));
   }
 }
-var INJECT_PREFIX, POLL_MS, STATUS_COOLDOWN_MS, LINK_ALERT_AFTER_MS, MAX_IMAGE_BYTES, MAX_FILE_BYTES;
+var INJECT_PREFIX, POLL_MS, STATUS_COOLDOWN_MS, LINK_ALERT_AFTER_MS, LINK_FORCE_RECONNECT_AFTER_MS, MAX_IMAGE_BYTES, MAX_FILE_BYTES;
 var init_daemon = __esm({
   "src/daemon.ts"() {
     "use strict";
@@ -137939,6 +137963,7 @@ var init_daemon = __esm({
     POLL_MS = 5e3;
     STATUS_COOLDOWN_MS = 6e4;
     LINK_ALERT_AFTER_MS = 9e4;
+    LINK_FORCE_RECONNECT_AFTER_MS = 6e4;
     MAX_IMAGE_BYTES = 10 * 1024 * 1024;
     MAX_FILE_BYTES = 30 * 1024 * 1024;
   }
