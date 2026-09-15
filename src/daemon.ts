@@ -13,25 +13,10 @@ import { ensureHomeDir, homeDir, logPath, pidPath, sockPath } from './paths.js';
 import { validateAsk, validateNotify, ValidationError, type AskPayload } from './validate.js';
 
 const INJECT_PREFIX = '[herdr-lark remote] ';
-/** Distinct from the remote prefix: this is the channel talking, not the human. */
-const NUDGE_PREFIX = '[herdr-lark auto] ';
-const NUDGE_TEXT =
-  '提醒：远程模式开着，而你刚结束的那一轮没有同步到飞书——用户在手机上一个字也没看到。' +
-  '把你刚才在终端说的话**原样**用 `herdr-lark say` 发一份过去（逐字，不要为手机精简），' +
-  '并给个有信息量的 --title。以后每一轮回复都要这样收尾。';
 const POLL_MS = 5_000;
 const STATUS_COOLDOWN_MS = 60_000;
 /** How long the subscription may be down before the groups are told. */
 const LINK_ALERT_AFTER_MS = 90_000;
-/**
- * A session that sent something this recently is treated as having mirrored
- * the turn that just ended. herdr's agent status flickers idle between tool
- * calls inside one turn, so a turn boundary is not precise enough to compare
- * timestamps against — without this margin the nudge fires on agents that did
- * exactly the right thing seconds earlier, and a reminder that cries wolf is
- * one everybody learns to ignore.
- */
-const NUDGE_GRACE_MS = 180_000;
 
 /** The log records ids and state transitions only — never message bodies. */
 function log(event: string, detail: Record<string, unknown> = {}): void {
@@ -135,15 +120,13 @@ export async function runDaemon(): Promise<void> {
   const workingSince = new Map<string, number>();
   /** When this session last sent anything to its group. */
   const lastOutbound = new Map<string, number>();
-  /** Already nudged since that session's last outbound — never nudge twice. */
-  const nudged = new Set<string>();
-  /** Consecutive idle observations, to debounce the flicker between tools. */
-  const idleTicks = new Map<string, number>();
 
-  /** Called whenever a session communicates, by any route. */
+  /** Called whenever a session communicates, by any route. Kept for the log
+   * and for diagnosing a group that has gone quiet; nothing acts on it
+   * automatically — an automatic reminder would have to interrupt the very
+   * conversation the human is reading. */
   const markOutbound = (key: string): void => {
     lastOutbound.set(key, Date.now());
-    nudged.delete(key);
   };
   const startedAt = new Date().toISOString();
 
@@ -465,20 +448,6 @@ export async function runDaemon(): Promise<void> {
       // up. The rule that every reply is mirrored is the agent's to follow,
       // and an agent that forgets fails silently — so make the miss visible
       // to the only party that can fix it.
-      const resting = a.agent_status === 'idle' || a.agent_status === 'done';
-      idleTicks.set(b.key, resting ? (idleTicks.get(b.key) ?? 0) + 1 : 0);
-      // Two consecutive idle observations, not one: a single idle tick is
-      // usually the pause between two tool calls, not the end of a turn.
-      if (resting && idleTicks.get(b.key) === 2) {
-        const sinceOutbound = Date.now() - (lastOutbound.get(b.key) ?? 0);
-        if (sinceOutbound > NUDGE_GRACE_MS && !nudged.has(b.key) && !pendingFor(b.key)) {
-          nudged.add(b.key);
-          log('nudge', { key: b.key, sinceOutboundSec: Math.round(sinceOutbound / 1000) });
-          void promptPane(a.pane_id, `${NUDGE_PREFIX}${NUDGE_TEXT}`);
-          continue;
-        }
-      }
-
       let kind: 'blocked' | 'idle' | null = null;
       let ranMs = 0;
       if (a.agent_status === 'blocked') {
