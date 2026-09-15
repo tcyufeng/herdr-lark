@@ -13,6 +13,12 @@ import { ensureHomeDir, homeDir, logPath, pidPath, sockPath } from './paths.js';
 import { validateAsk, validateNotify, ValidationError, type AskPayload } from './validate.js';
 
 const INJECT_PREFIX = '[herdr-lark remote] ';
+/** Distinct from the remote prefix: this is the channel talking, not the human. */
+const NUDGE_PREFIX = '[herdr-lark auto] ';
+const NUDGE_TEXT =
+  '提醒：远程模式开着，而你刚结束的那一轮没有同步到飞书——用户在手机上一个字也没看到。' +
+  '把你刚才在终端说的话**原样**用 `herdr-lark say` 发一份过去（逐字，不要为手机精简），' +
+  '并给个有信息量的 --title。以后每一轮回复都要这样收尾。';
 const POLL_MS = 5_000;
 const STATUS_COOLDOWN_MS = 60_000;
 
@@ -116,6 +122,16 @@ export async function runDaemon(): Promise<void> {
   const lastStatus = new Map<string, string>();
   const lastStatusPush = new Map<string, number>();
   const workingSince = new Map<string, number>();
+  /** When this session last sent anything to its group. */
+  const lastOutbound = new Map<string, number>();
+  /** Already nudged since that session's last outbound — never nudge twice. */
+  const nudged = new Set<string>();
+
+  /** Called whenever a session communicates, by any route. */
+  const markOutbound = (key: string): void => {
+    lastOutbound.set(key, Date.now());
+    nudged.delete(key);
+  };
   const startedAt = new Date().toISOString();
 
   const channel: LarkChannel = createLarkChannel({
@@ -423,6 +439,22 @@ export async function runDaemon(): Promise<void> {
       if (a.agent_status === 'working' && prev !== 'working') workingSince.set(b.key, now);
       if (!prev || prev === a.agent_status) continue;
 
+      // A turn that ended without the session saying anything to its group
+      // means the human got nothing on their phone while the terminal filled
+      // up. The rule that every reply is mirrored is the agent's to follow,
+      // and an agent that forgets fails silently — so make the miss visible
+      // to the only party that can fix it.
+      if (prev === 'working' && (a.agent_status === 'idle' || a.agent_status === 'done')) {
+        const started = workingSince.get(b.key) ?? 0;
+        const spoke = (lastOutbound.get(b.key) ?? 0) >= started;
+        if (!spoke && !nudged.has(b.key) && !pendingFor(b.key)) {
+          nudged.add(b.key);
+          log('nudge', { key: b.key });
+          void promptPane(a.pane_id, `${NUDGE_PREFIX}${NUDGE_TEXT}`);
+          continue;
+        }
+      }
+
       let kind: 'blocked' | 'idle' | null = null;
       let ranMs = 0;
       if (a.agent_status === 'blocked') {
@@ -709,6 +741,7 @@ export async function runDaemon(): Promise<void> {
           }
           try {
             await channel.send(b.chatId, { card: notifyCard(payload, b.label) });
+            markOutbound(b.key);
             log('notify.sent', { key: b.key });
             return { ok: true, kind: 'ack' };
           } catch (err) {
@@ -723,6 +756,7 @@ export async function runDaemon(): Promise<void> {
           if (!text) return { ok: false, code: 1, message: '没有内容可发' };
           try {
             await channel.send(b.chatId, { card: sayCard(text, b.label, req.title) });
+            markOutbound(b.key);
             log('say.sent', { key: b.key, chars: text.length });
             return { ok: true, kind: 'ack' };
           } catch (err) {
@@ -748,6 +782,7 @@ export async function runDaemon(): Promise<void> {
               b.chatId,
               isImage ? { image: { source: bytes } } : { file: { source: bytes, fileName } },
             );
+            markOutbound(b.key);
             log('file.sent', { key: b.key, isImage, size: bytes.length });
             return { ok: true, kind: 'ack' };
           } catch (err) {
@@ -777,6 +812,7 @@ export async function runDaemon(): Promise<void> {
           } catch (err) {
             return { ok: false, code: 3, message: `发送失败：${err instanceof Error ? err.message : String(err)}` };
           }
+          markOutbound(b.key);
           log('ask.sent', { reqId, key: b.key, options: payload.options.length });
 
           return await new Promise<Response>((resolve) => {

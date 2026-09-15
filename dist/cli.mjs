@@ -137271,6 +137271,12 @@ async function runDaemon() {
   const lastStatus = /* @__PURE__ */ new Map();
   const lastStatusPush = /* @__PURE__ */ new Map();
   const workingSince = /* @__PURE__ */ new Map();
+  const lastOutbound = /* @__PURE__ */ new Map();
+  const nudged = /* @__PURE__ */ new Set();
+  const markOutbound = (key) => {
+    lastOutbound.set(key, Date.now());
+    nudged.delete(key);
+  };
   const startedAt = (/* @__PURE__ */ new Date()).toISOString();
   const channel = createLarkChannel({
     appId: creds.appId,
@@ -137496,6 +137502,16 @@ ${list}`;
       const now = Date.now();
       if (a.agent_status === "working" && prev !== "working") workingSince.set(b.key, now);
       if (!prev || prev === a.agent_status) continue;
+      if (prev === "working" && (a.agent_status === "idle" || a.agent_status === "done")) {
+        const started = workingSince.get(b.key) ?? 0;
+        const spoke = (lastOutbound.get(b.key) ?? 0) >= started;
+        if (!spoke && !nudged.has(b.key) && !pendingFor(b.key)) {
+          nudged.add(b.key);
+          log("nudge", { key: b.key });
+          void promptPane(a.pane_id, `${NUDGE_PREFIX}${NUDGE_TEXT}`);
+          continue;
+        }
+      }
       let kind = null;
       let ranMs = 0;
       if (a.agent_status === "blocked") {
@@ -137742,6 +137758,7 @@ ${list}`;
           }
           try {
             await channel.send(b.chatId, { card: notifyCard(payload, b.label) });
+            markOutbound(b.key);
             log("notify.sent", { key: b.key });
             return { ok: true, kind: "ack" };
           } catch (err) {
@@ -137755,6 +137772,7 @@ ${list}`;
           if (!text) return { ok: false, code: 1, message: "\u6CA1\u6709\u5185\u5BB9\u53EF\u53D1" };
           try {
             await channel.send(b.chatId, { card: sayCard(text, b.label, req.title) });
+            markOutbound(b.key);
             log("say.sent", { key: b.key, chars: text.length });
             return { ok: true, kind: "ack" };
           } catch (err) {
@@ -137775,6 +137793,7 @@ ${list}`;
               b.chatId,
               isImage ? { image: { source: bytes } } : { file: { source: bytes, fileName } }
             );
+            markOutbound(b.key);
             log("file.sent", { key: b.key, isImage, size: bytes.length });
             return { ok: true, kind: "ack" };
           } catch (err) {
@@ -137803,6 +137822,7 @@ ${list}`;
           } catch (err) {
             return { ok: false, code: 3, message: `\u53D1\u9001\u5931\u8D25\uFF1A${err instanceof Error ? err.message : String(err)}` };
           }
+          markOutbound(b.key);
           log("ask.sent", { reqId, key: b.key, options: payload.options.length });
           return await new Promise((resolve2) => {
             const p = {
@@ -137849,7 +137869,7 @@ ${list}`;
     process.on(sig, () => void shutdown(sig));
   }
 }
-var INJECT_PREFIX, POLL_MS, STATUS_COOLDOWN_MS, MAX_IMAGE_BYTES, MAX_FILE_BYTES;
+var INJECT_PREFIX, NUDGE_PREFIX, NUDGE_TEXT, POLL_MS, STATUS_COOLDOWN_MS, MAX_IMAGE_BYTES, MAX_FILE_BYTES;
 var init_daemon = __esm({
   "src/daemon.ts"() {
     "use strict";
@@ -137862,6 +137882,8 @@ var init_daemon = __esm({
     init_paths();
     init_validate();
     INJECT_PREFIX = "[herdr-lark remote] ";
+    NUDGE_PREFIX = "[herdr-lark auto] ";
+    NUDGE_TEXT = "\u63D0\u9192\uFF1A\u8FDC\u7A0B\u6A21\u5F0F\u5F00\u7740\uFF0C\u800C\u4F60\u521A\u7ED3\u675F\u7684\u90A3\u4E00\u8F6E\u6CA1\u6709\u540C\u6B65\u5230\u98DE\u4E66\u2014\u2014\u7528\u6237\u5728\u624B\u673A\u4E0A\u4E00\u4E2A\u5B57\u4E5F\u6CA1\u770B\u5230\u3002\u628A\u4F60\u521A\u624D\u5728\u7EC8\u7AEF\u8BF4\u7684\u8BDD**\u539F\u6837**\u7528 `herdr-lark say` \u53D1\u4E00\u4EFD\u8FC7\u53BB\uFF08\u9010\u5B57\uFF0C\u4E0D\u8981\u4E3A\u624B\u673A\u7CBE\u7B80\uFF09\uFF0C\u5E76\u7ED9\u4E2A\u6709\u4FE1\u606F\u91CF\u7684 --title\u3002\u4EE5\u540E\u6BCF\u4E00\u8F6E\u56DE\u590D\u90FD\u8981\u8FD9\u6837\u6536\u5C3E\u3002";
     POLL_MS = 5e3;
     STATUS_COOLDOWN_MS = 6e4;
     MAX_IMAGE_BYTES = 10 * 1024 * 1024;

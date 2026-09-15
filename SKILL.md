@@ -161,6 +161,11 @@ are transcribed; if transcription fails you get a plain sentence saying so, neve
 **Seeing the prefix means the human is on their phone**: answer in the terminal as usual, and `say` the
 same answer so it reaches them.
 
+A line starting `[herdr-lark auto] ` is the **channel**, not the human: the daemon noticed that a turn
+of yours ended while remote mode was on without anything reaching the group, which means the human saw
+nothing while your terminal filled up. Do what it says — mirror that reply — rather than answering it
+as if the human had spoken. It fires at most once per missed turn.
+
 ## Exit codes
 
 | rc | meaning | sent? | what to do |
