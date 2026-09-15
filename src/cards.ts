@@ -24,6 +24,8 @@ const TEXTS = {
     notDeliveredBody: (why: string) => `刚才那条消息没能送进终端：${why}`,
     statusBlocked: '等你输入',
     statusIdle: '干完了',
+    linkDown: '收不到你的消息了',
+    linkBack: '连接恢复了',
   },
   en: {
     doing: 'Doing',
@@ -46,6 +48,8 @@ const TEXTS = {
     notDeliveredBody: (why: string) => `That message never reached the terminal: ${why}`,
     statusBlocked: 'waiting for you',
     statusIdle: 'finished',
+    linkDown: 'not receiving your messages',
+    linkBack: 'connection restored',
   },
 } as const;
 
@@ -179,6 +183,25 @@ export function receiptCard(projectLabel: string, why: string, lang: Lang = 'zh'
   return card({ icon: '⚠️', title: `[${projectLabel}] ${T.notDelivered}`, template: 'orange' }, [
     md(T.notDeliveredBody(why)),
   ]);
+}
+
+/**
+ * The WebSocket carries messages *in*; sending goes out over REST. So when
+ * the subscription drops, the channel half-works: replies still reach the
+ * phone while everything the human sends vanishes, with nothing anywhere
+ * saying so. This card uses the half that still works to report the half
+ * that does not.
+ */
+export function linkCard(projectLabel: string, state: 'down' | 'back', detail: string, lang: Lang = 'zh'): object {
+  const T = t(lang);
+  return card(
+    {
+      icon: state === 'down' ? '📵' : '📶',
+      title: `[${projectLabel}] ${state === 'down' ? T.linkDown : T.linkBack}`,
+      template: state === 'down' ? 'red' : 'green',
+    },
+    [md(detail)],
+  );
 }
 
 export function statusCard(

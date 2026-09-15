@@ -137116,6 +137116,17 @@ function receiptCard(projectLabel2, why, lang = "zh") {
     md(T.notDeliveredBody(why))
   ]);
 }
+function linkCard(projectLabel2, state, detail, lang = "zh") {
+  const T = t(lang);
+  return card(
+    {
+      icon: state === "down" ? "\u{1F4F5}" : "\u{1F4F6}",
+      title: `[${projectLabel2}] ${state === "down" ? T.linkDown : T.linkBack}`,
+      template: state === "down" ? "red" : "green"
+    },
+    [md(detail)]
+  );
+}
 function statusCard(projectLabel2, status, detail, lang = "zh") {
   const T = t(lang);
   return card(
@@ -137152,7 +137163,9 @@ var init_cards = __esm({
         notDelivered: "\u6CA1\u80FD\u9001\u8FBE",
         notDeliveredBody: (why) => `\u521A\u624D\u90A3\u6761\u6D88\u606F\u6CA1\u80FD\u9001\u8FDB\u7EC8\u7AEF\uFF1A${why}`,
         statusBlocked: "\u7B49\u4F60\u8F93\u5165",
-        statusIdle: "\u5E72\u5B8C\u4E86"
+        statusIdle: "\u5E72\u5B8C\u4E86",
+        linkDown: "\u6536\u4E0D\u5230\u4F60\u7684\u6D88\u606F\u4E86",
+        linkBack: "\u8FDE\u63A5\u6062\u590D\u4E86"
       },
       en: {
         doing: "Doing",
@@ -137174,7 +137187,9 @@ var init_cards = __esm({
         notDelivered: "Not delivered",
         notDeliveredBody: (why) => `That message never reached the terminal: ${why}`,
         statusBlocked: "waiting for you",
-        statusIdle: "finished"
+        statusIdle: "finished",
+        linkDown: "not receiving your messages",
+        linkBack: "connection restored"
       }
     };
     t = (lang = "zh") => TEXTS[lang];
@@ -137421,6 +137436,7 @@ async function runDaemon() {
   channel.on("message", async (msg) => {
     if (msg.senderIsBot) return;
     const b = bindings.byChat(msg.chatId, await liveSessions());
+    log("message.in", { chatId: msg.chatId, bound: !!b, resources: msg.resources.length, chars: msg.content.length });
     if (!b) return;
     const got = await saveResources(msg);
     let text = msg.content.replace(/<audio\b[^>]*\/?>/gi, "").trim();
@@ -137477,6 +137493,7 @@ ${list}`;
     };
   });
   channel.on("error", (err) => log("channel.error", { code: err.code, message: err.message }));
+  channel.on("reject", (evt) => log("message.rejected", { chatId: evt.chatId, reason: evt.reason }));
   channel.on("reconnecting", () => log("channel.reconnecting"));
   channel.on("reconnected", () => log("channel.reconnected"));
   await channel.connect();
@@ -137537,12 +137554,61 @@ ${list}`;
       }
     }
   };
+  let downSince = 0;
+  let alerted = false;
+  const checkLink = async () => {
+    const state = channel.getConnectionStatus()?.state;
+    const healthy = state === "connected";
+    if (healthy) {
+      if (alerted) {
+        const downFor = Math.round((Date.now() - downSince) / 1e3);
+        alerted = false;
+        for (const b of bindings.all().filter((x) => x.away)) {
+          try {
+            await channel.send(b.chatId, {
+              card: linkCard(b.label, "back", `\u65AD\u4E86 ${downFor} \u79D2\uFF0C\u73B0\u5728\u6062\u590D\u4E86\u3002\u65AD\u7EBF\u671F\u95F4\u4F60\u53D1\u7684\u6D88\u606F**\u6CA1\u6709\u9001\u5230**\uFF0C\u9700\u8981\u7684\u8BDD\u91CD\u53D1\u4E00\u6B21\u3002`)
+            });
+          } catch {
+          }
+        }
+        log("link.recovered", { downForSec: downFor });
+      }
+      downSince = 0;
+      return;
+    }
+    if (!downSince) downSince = Date.now();
+    if (alerted || Date.now() - downSince < LINK_ALERT_AFTER_MS) return;
+    alerted = true;
+    log("link.down", { state });
+    for (const b of bindings.all().filter((x) => x.away)) {
+      try {
+        await channel.send(b.chatId, {
+          card: linkCard(
+            b.label,
+            "down",
+            `\u548C\u98DE\u4E66\u7684\u957F\u8FDE\u63A5\u65AD\u4E86\uFF08\u72B6\u6001 \`${state ?? "unknown"}\`\uFF09\uFF0C**\u4F60\u73B0\u5728\u53D1\u7684\u6D88\u606F\u6211\u6536\u4E0D\u5230**\u3002
+
+\u8FD9\u6761\u5361\u7247\u80FD\u53D1\u51FA\u6765\u662F\u56E0\u4E3A\u53D1\u9001\u8D70\u7684\u662F\u53E6\u4E00\u6761\u901A\u9053\u3002\u6B63\u5728\u81EA\u52A8\u91CD\u8FDE\uFF1B\u4E00\u76F4\u4E0D\u6062\u590D\u7684\u8BDD\uFF0C\u5728\u7EC8\u7AEF\u8DD1 \`herdr-lark daemon --stop --force\` \u518D \`herdr-lark daemon --detach\`\u3002`
+          )
+        });
+      } catch (err) {
+        log("link.alert-failed", { key: b.key, err: String(err).slice(0, 120) });
+      }
+    }
+  };
+  const linkTimer = setInterval(() => void checkLink(), POLL_MS);
+  linkTimer.unref();
   const pollTimer = setInterval(() => void poll(), POLL_MS);
   pollTimer.unref();
   let server;
   const shutdown = async (why) => {
     log("daemon.stopping", { why });
+    setTimeout(() => {
+      log("daemon.force-exit", { why });
+      process.exit(0);
+    }, 8e3).unref();
     clearInterval(pollTimer);
+    clearInterval(linkTimer);
     for (const p of [...pendings.values()]) {
       await closeWithout(p, "cancelled", {
         ok: false,
@@ -137869,7 +137935,7 @@ ${list}`;
     process.on(sig, () => void shutdown(sig));
   }
 }
-var INJECT_PREFIX, NUDGE_PREFIX, NUDGE_TEXT, POLL_MS, STATUS_COOLDOWN_MS, MAX_IMAGE_BYTES, MAX_FILE_BYTES;
+var INJECT_PREFIX, NUDGE_PREFIX, NUDGE_TEXT, POLL_MS, STATUS_COOLDOWN_MS, LINK_ALERT_AFTER_MS, MAX_IMAGE_BYTES, MAX_FILE_BYTES;
 var init_daemon = __esm({
   "src/daemon.ts"() {
     "use strict";
@@ -137886,6 +137952,7 @@ var init_daemon = __esm({
     NUDGE_TEXT = "\u63D0\u9192\uFF1A\u8FDC\u7A0B\u6A21\u5F0F\u5F00\u7740\uFF0C\u800C\u4F60\u521A\u7ED3\u675F\u7684\u90A3\u4E00\u8F6E\u6CA1\u6709\u540C\u6B65\u5230\u98DE\u4E66\u2014\u2014\u7528\u6237\u5728\u624B\u673A\u4E0A\u4E00\u4E2A\u5B57\u4E5F\u6CA1\u770B\u5230\u3002\u628A\u4F60\u521A\u624D\u5728\u7EC8\u7AEF\u8BF4\u7684\u8BDD**\u539F\u6837**\u7528 `herdr-lark say` \u53D1\u4E00\u4EFD\u8FC7\u53BB\uFF08\u9010\u5B57\uFF0C\u4E0D\u8981\u4E3A\u624B\u673A\u7CBE\u7B80\uFF09\uFF0C\u5E76\u7ED9\u4E2A\u6709\u4FE1\u606F\u91CF\u7684 --title\u3002\u4EE5\u540E\u6BCF\u4E00\u8F6E\u56DE\u590D\u90FD\u8981\u8FD9\u6837\u6536\u5C3E\u3002";
     POLL_MS = 5e3;
     STATUS_COOLDOWN_MS = 6e4;
+    LINK_ALERT_AFTER_MS = 9e4;
     MAX_IMAGE_BYTES = 10 * 1024 * 1024;
     MAX_FILE_BYTES = 30 * 1024 * 1024;
   }
@@ -137901,7 +137968,7 @@ init_ipc();
 init_paths();
 init_validate();
 import { spawn } from "node:child_process";
-import { existsSync as existsSync5, openSync, realpathSync as realpathSync2, unlinkSync as unlinkSync4 } from "node:fs";
+import { existsSync as existsSync5, openSync, readFileSync as readFileSync5, realpathSync as realpathSync2, unlinkSync as unlinkSync4 } from "node:fs";
 import { fileURLToPath } from "node:url";
 for (const stream of [process.stdout, process.stderr]) {
   stream.on("error", (err) => {
@@ -138164,9 +138231,28 @@ async function cmdDaemon(args) {
     }
     const res = await request({ type: "stop" }, { timeoutMs: 5e3 });
     if (!res.ok) die(3, res.message);
-    for (let i = 0; i < 60; i++) {
-      if (!existsSync5(sockPath())) break;
-      await new Promise((r) => setTimeout(r, 500));
+    let pid = 0;
+    try {
+      pid = Number(readFileSync5(pidPath(), "utf8").trim()) || 0;
+    } catch {
+    }
+    const alive = () => {
+      if (!pid) return existsSync5(sockPath());
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    for (let i = 0; i < 60 && alive(); i++) await new Promise((r) => setTimeout(r, 500));
+    if (alive())
+      die(3, `daemon (pid ${pid}) \u8BF4\u505C\u4E86\u4F46\u8FDB\u7A0B\u8FD8\u5728\u3002\u5F3A\u5236\u7ED3\u675F\uFF1Akill ${pid}\uFF0C\u7136\u540E herdr-lark daemon --detach`);
+    for (const f of [sockPath(), pidPath()]) {
+      try {
+        if (existsSync5(f)) unlinkSync4(f);
+      } catch {
+      }
     }
     process.stdout.write("daemon: \u5DF2\u505C\u6B62\n");
     return;

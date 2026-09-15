@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import type { Server } from 'node:net';
 import { createLarkChannel, type CardActionEvent, type LarkChannel, type NormalizedMessage } from '@larksuite/channel';
 import { BindingStore, type Binding } from './bindings.js';
-import { askCard, notifyCard, receiptCard, sayCard, statusCard } from './cards.js';
+import { askCard, linkCard, notifyCard, receiptCard, sayCard, statusCard } from './cards.js';
 import { resolveCreds } from './creds.js';
 import { agentList, findPaneForProject, findPaneForSession, promptPane } from './herdr.js';
 import { serve, type Caller, type Request, type Response } from './ipc.js';
@@ -21,6 +21,8 @@ const NUDGE_TEXT =
   '并给个有信息量的 --title。以后每一轮回复都要这样收尾。';
 const POLL_MS = 5_000;
 const STATUS_COOLDOWN_MS = 60_000;
+/** How long the subscription may be down before the groups are told. */
+const LINK_ALERT_AFTER_MS = 90_000;
 
 /** The log records ids and state transitions only — never message bodies. */
 function log(event: string, detail: Record<string, unknown> = {}): void {
@@ -339,6 +341,10 @@ export async function runDaemon(): Promise<void> {
   channel.on('message', async (msg: NormalizedMessage) => {
     if (msg.senderIsBot) return;
     const b = bindings.byChat(msg.chatId, await liveSessions());
+    // Log arrival before anything can drop it. Without this there is no way to
+    // tell "the message never reached us" from "it reached us and we dropped
+    // it", and the human just sees silence either way.
+    log('message.in', { chatId: msg.chatId, bound: !!b, resources: msg.resources.length, chars: msg.content.length });
     if (!b) return;
     const got = await saveResources(msg);
     // A voice message arrives as an `<audio .../>` placeholder in `content`.
@@ -402,6 +408,10 @@ export async function runDaemon(): Promise<void> {
   });
 
   channel.on('error', (err) => log('channel.error', { code: err.code, message: err.message }));
+  // The SDK drops messages that fail its policy gate and says why. Not
+  // listening meant a dropped message looked exactly like one that was never
+  // sent.
+  channel.on('reject', (evt) => log('message.rejected', { chatId: evt.chatId, reason: evt.reason }));
   channel.on('reconnecting', () => log('channel.reconnecting'));
   channel.on('reconnected', () => log('channel.reconnected'));
 
@@ -483,6 +493,56 @@ export async function runDaemon(): Promise<void> {
       }
     }
   };
+  // ---- subscription health ------------------------------------------------
+  // Sending works over REST even while the WebSocket is down, so the channel
+  // can报 its own half-failure. Without this the human sees replies arriving
+  // normally and has no way to know their own messages are going nowhere.
+  let downSince = 0;
+  let alerted = false;
+  const checkLink = async (): Promise<void> => {
+    const state = channel.getConnectionStatus()?.state;
+    const healthy = state === 'connected';
+    if (healthy) {
+      if (alerted) {
+        const downFor = Math.round((Date.now() - downSince) / 1000);
+        alerted = false;
+        for (const b of bindings.all().filter((x) => x.away)) {
+          try {
+            await channel.send(b.chatId, {
+              card: linkCard(b.label, 'back', `断了 ${downFor} 秒，现在恢复了。断线期间你发的消息**没有送到**，需要的话重发一次。`),
+            });
+          } catch {
+            // the link just came back; a failure here is not worth cascading
+          }
+        }
+        log('link.recovered', { downForSec: downFor });
+      }
+      downSince = 0;
+      return;
+    }
+    if (!downSince) downSince = Date.now();
+    if (alerted || Date.now() - downSince < LINK_ALERT_AFTER_MS) return;
+    alerted = true;
+    log('link.down', { state });
+    for (const b of bindings.all().filter((x) => x.away)) {
+      try {
+        await channel.send(b.chatId, {
+          card: linkCard(
+            b.label,
+            'down',
+            `和飞书的长连接断了（状态 \`${state ?? 'unknown'}\`），**你现在发的消息我收不到**。\n\n` +
+              '这条卡片能发出来是因为发送走的是另一条通道。正在自动重连；一直不恢复的话，' +
+              '在终端跑 `herdr-lark daemon --stop --force` 再 `herdr-lark daemon --detach`。',
+          ),
+        });
+      } catch (err) {
+        log('link.alert-failed', { key: b.key, err: String(err).slice(0, 120) });
+      }
+    }
+  };
+  const linkTimer = setInterval(() => void checkLink(), POLL_MS);
+  linkTimer.unref();
+
   const pollTimer = setInterval(() => void poll(), POLL_MS);
   pollTimer.unref();
 
@@ -490,7 +550,15 @@ export async function runDaemon(): Promise<void> {
   let server: Server | undefined;
   const shutdown = async (why: string): Promise<void> => {
     log('daemon.stopping', { why });
+    // `channel.disconnect()` can hang on a half-dead socket, and a daemon that
+    // says it stopped but keeps running blocks the next `--detach` from
+    // starting a healthy one. Guarantee the exit.
+    setTimeout(() => {
+      log('daemon.force-exit', { why });
+      process.exit(0);
+    }, 8_000).unref();
     clearInterval(pollTimer);
+    clearInterval(linkTimer);
     for (const p of [...pendings.values()]) {
       await closeWithout(p, 'cancelled', {
         ok: false,

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { spawn } from 'node:child_process';
-import { existsSync, openSync, realpathSync, unlinkSync } from 'node:fs';
+import { existsSync, openSync, readFileSync, realpathSync, unlinkSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { createLarkChannel, registerApp } from '@larksuite/channel';
 import QRCode from 'qrcode';
@@ -316,9 +316,34 @@ async function cmdDaemon(args: string[]): Promise<void> {
     }
     const res = await request({ type: 'stop' }, { timeoutMs: 5000 });
     if (!res.ok) die(3, res.message);
-    for (let i = 0; i < 60; i++) {
-      if (!existsSync(sockPath())) break;
-      await new Promise((r) => setTimeout(r, 500));
+    // Verify it is actually gone. Reporting "stopped" while the process is
+    // still alive is worse than reporting failure: the next `--detach` sees a
+    // live socket, declines to start, and the user is left with the daemon
+    // they were trying to replace.
+    let pid = 0;
+    try {
+      pid = Number(readFileSync(pidPath(), 'utf8').trim()) || 0;
+    } catch {
+      // no pid file; fall back to the socket check alone
+    }
+    const alive = (): boolean => {
+      if (!pid) return existsSync(sockPath());
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    for (let i = 0; i < 60 && alive(); i++) await new Promise((r) => setTimeout(r, 500));
+    if (alive())
+      die(3, `daemon (pid ${pid}) 说停了但进程还在。强制结束：kill ${pid}，然后 herdr-lark daemon --detach`);
+    for (const f of [sockPath(), pidPath()]) {
+      try {
+        if (existsSync(f)) unlinkSync(f);
+      } catch {
+        // best effort
+      }
     }
     process.stdout.write('daemon: 已停止\n');
     return;
