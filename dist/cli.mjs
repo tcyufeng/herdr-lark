@@ -137288,6 +137288,7 @@ async function runDaemon() {
   const workingSince = /* @__PURE__ */ new Map();
   const lastOutbound = /* @__PURE__ */ new Map();
   const nudged = /* @__PURE__ */ new Set();
+  const idleTicks = /* @__PURE__ */ new Map();
   const markOutbound = (key) => {
     lastOutbound.set(key, Date.now());
     nudged.delete(key);
@@ -137519,12 +137520,13 @@ ${list}`;
       const now = Date.now();
       if (a.agent_status === "working" && prev !== "working") workingSince.set(b.key, now);
       if (!prev || prev === a.agent_status) continue;
-      if (prev === "working" && (a.agent_status === "idle" || a.agent_status === "done")) {
-        const started = workingSince.get(b.key) ?? 0;
-        const spoke = (lastOutbound.get(b.key) ?? 0) >= started;
-        if (!spoke && !nudged.has(b.key) && !pendingFor(b.key)) {
+      const resting = a.agent_status === "idle" || a.agent_status === "done";
+      idleTicks.set(b.key, resting ? (idleTicks.get(b.key) ?? 0) + 1 : 0);
+      if (resting && idleTicks.get(b.key) === 2) {
+        const sinceOutbound = Date.now() - (lastOutbound.get(b.key) ?? 0);
+        if (sinceOutbound > NUDGE_GRACE_MS && !nudged.has(b.key) && !pendingFor(b.key)) {
           nudged.add(b.key);
-          log("nudge", { key: b.key });
+          log("nudge", { key: b.key, sinceOutboundSec: Math.round(sinceOutbound / 1e3) });
           void promptPane(a.pane_id, `${NUDGE_PREFIX}${NUDGE_TEXT}`);
           continue;
         }
@@ -137935,7 +137937,7 @@ ${list}`;
     process.on(sig, () => void shutdown(sig));
   }
 }
-var INJECT_PREFIX, NUDGE_PREFIX, NUDGE_TEXT, POLL_MS, STATUS_COOLDOWN_MS, LINK_ALERT_AFTER_MS, MAX_IMAGE_BYTES, MAX_FILE_BYTES;
+var INJECT_PREFIX, NUDGE_PREFIX, NUDGE_TEXT, POLL_MS, STATUS_COOLDOWN_MS, LINK_ALERT_AFTER_MS, NUDGE_GRACE_MS, MAX_IMAGE_BYTES, MAX_FILE_BYTES;
 var init_daemon = __esm({
   "src/daemon.ts"() {
     "use strict";
@@ -137953,6 +137955,7 @@ var init_daemon = __esm({
     POLL_MS = 5e3;
     STATUS_COOLDOWN_MS = 6e4;
     LINK_ALERT_AFTER_MS = 9e4;
+    NUDGE_GRACE_MS = 18e4;
     MAX_IMAGE_BYTES = 10 * 1024 * 1024;
     MAX_FILE_BYTES = 30 * 1024 * 1024;
   }

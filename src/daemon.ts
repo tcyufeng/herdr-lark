@@ -23,6 +23,15 @@ const POLL_MS = 5_000;
 const STATUS_COOLDOWN_MS = 60_000;
 /** How long the subscription may be down before the groups are told. */
 const LINK_ALERT_AFTER_MS = 90_000;
+/**
+ * A session that sent something this recently is treated as having mirrored
+ * the turn that just ended. herdr's agent status flickers idle between tool
+ * calls inside one turn, so a turn boundary is not precise enough to compare
+ * timestamps against — without this margin the nudge fires on agents that did
+ * exactly the right thing seconds earlier, and a reminder that cries wolf is
+ * one everybody learns to ignore.
+ */
+const NUDGE_GRACE_MS = 180_000;
 
 /** The log records ids and state transitions only — never message bodies. */
 function log(event: string, detail: Record<string, unknown> = {}): void {
@@ -128,6 +137,8 @@ export async function runDaemon(): Promise<void> {
   const lastOutbound = new Map<string, number>();
   /** Already nudged since that session's last outbound — never nudge twice. */
   const nudged = new Set<string>();
+  /** Consecutive idle observations, to debounce the flicker between tools. */
+  const idleTicks = new Map<string, number>();
 
   /** Called whenever a session communicates, by any route. */
   const markOutbound = (key: string): void => {
@@ -454,12 +465,15 @@ export async function runDaemon(): Promise<void> {
       // up. The rule that every reply is mirrored is the agent's to follow,
       // and an agent that forgets fails silently — so make the miss visible
       // to the only party that can fix it.
-      if (prev === 'working' && (a.agent_status === 'idle' || a.agent_status === 'done')) {
-        const started = workingSince.get(b.key) ?? 0;
-        const spoke = (lastOutbound.get(b.key) ?? 0) >= started;
-        if (!spoke && !nudged.has(b.key) && !pendingFor(b.key)) {
+      const resting = a.agent_status === 'idle' || a.agent_status === 'done';
+      idleTicks.set(b.key, resting ? (idleTicks.get(b.key) ?? 0) + 1 : 0);
+      // Two consecutive idle observations, not one: a single idle tick is
+      // usually the pause between two tool calls, not the end of a turn.
+      if (resting && idleTicks.get(b.key) === 2) {
+        const sinceOutbound = Date.now() - (lastOutbound.get(b.key) ?? 0);
+        if (sinceOutbound > NUDGE_GRACE_MS && !nudged.has(b.key) && !pendingFor(b.key)) {
           nudged.add(b.key);
-          log('nudge', { key: b.key });
+          log('nudge', { key: b.key, sinceOutboundSec: Math.round(sinceOutbound / 1000) });
           void promptPane(a.pane_id, `${NUDGE_PREFIX}${NUDGE_TEXT}`);
           continue;
         }
