@@ -26,6 +26,8 @@ const LINK_ALERT_AFTER_MS = 90_000;
  * `reconnecting` event at all.
  */
 const LINK_FORCE_RECONNECT_AFTER_MS = 60_000;
+/** A reconnect loop that has been grinding this long is stuck, not working. */
+const LINK_STUCK_AFTER_MS = 300_000;
 
 /** The log records ids and state transitions only — never message bodies. */
 function log(event: string, detail: Record<string, unknown> = {}): void {
@@ -499,7 +501,11 @@ export async function runDaemon(): Promise<void> {
     if (reconnecting) return;
     reconnecting = true;
     lastForcedAt = Date.now();
-    log('link.forcing-reconnect', { downForSec: Math.round((Date.now() - downSince) / 1000) });
+    log('link.forcing-reconnect', {
+      downForSec: Math.round((Date.now() - downSince) / 1000),
+      state: channel.getConnectionStatus()?.state,
+      attempts: channel.getConnectionStatus()?.reconnectAttempts,
+    });
     try {
       await channel.disconnect();
     } catch (err) {
@@ -538,10 +544,18 @@ export async function runDaemon(): Promise<void> {
     }
     if (!downSince) downSince = Date.now();
     const down = Date.now() - downSince;
-    // Rebuild the connection ourselves. Waiting for the SDK is not enough: it
-    // only reconnects sockets it knows are dead.
-    if (down > LINK_FORCE_RECONNECT_AFTER_MS && Date.now() - lastForcedAt > LINK_FORCE_RECONNECT_AFTER_MS)
-      void forceReconnect();
+
+    // Only take over when the SDK has stopped trying. `connecting` and
+    // `reconnecting` mean it is on the case — forcing then would abort a
+    // legitimate attempt and restart its backoff from zero. `idle` and
+    // `failed` mean it has given up or never noticed, and those are the
+    // states a half-open socket leaves behind.
+    const givenUp = state === 'idle' || state === 'failed' || state === undefined;
+    const stuckLooping = !givenUp && down > LINK_STUCK_AFTER_MS;
+    const longEnough = down > LINK_FORCE_RECONNECT_AFTER_MS;
+    const cooledDown = Date.now() - lastForcedAt > LINK_FORCE_RECONNECT_AFTER_MS;
+    if ((givenUp ? longEnough : stuckLooping) && cooledDown) void forceReconnect();
+
     if (alerted || down < LINK_ALERT_AFTER_MS) return;
     alerted = true;
     log('link.down', { state });

@@ -137550,7 +137550,11 @@ ${list}`;
     if (reconnecting) return;
     reconnecting = true;
     lastForcedAt = Date.now();
-    log("link.forcing-reconnect", { downForSec: Math.round((Date.now() - downSince) / 1e3) });
+    log("link.forcing-reconnect", {
+      downForSec: Math.round((Date.now() - downSince) / 1e3),
+      state: channel.getConnectionStatus()?.state,
+      attempts: channel.getConnectionStatus()?.reconnectAttempts
+    });
     try {
       await channel.disconnect();
     } catch (err) {
@@ -137587,8 +137591,11 @@ ${list}`;
     }
     if (!downSince) downSince = Date.now();
     const down = Date.now() - downSince;
-    if (down > LINK_FORCE_RECONNECT_AFTER_MS && Date.now() - lastForcedAt > LINK_FORCE_RECONNECT_AFTER_MS)
-      void forceReconnect();
+    const givenUp = state === "idle" || state === "failed" || state === void 0;
+    const stuckLooping = !givenUp && down > LINK_STUCK_AFTER_MS;
+    const longEnough = down > LINK_FORCE_RECONNECT_AFTER_MS;
+    const cooledDown = Date.now() - lastForcedAt > LINK_FORCE_RECONNECT_AFTER_MS;
+    if ((givenUp ? longEnough : stuckLooping) && cooledDown) void forceReconnect();
     if (alerted || down < LINK_ALERT_AFTER_MS) return;
     alerted = true;
     log("link.down", { state });
@@ -137947,7 +137954,7 @@ ${list}`;
     process.on(sig, () => void shutdown(sig));
   }
 }
-var INJECT_PREFIX, POLL_MS, STATUS_COOLDOWN_MS, LINK_ALERT_AFTER_MS, LINK_FORCE_RECONNECT_AFTER_MS, MAX_IMAGE_BYTES, MAX_FILE_BYTES;
+var INJECT_PREFIX, POLL_MS, STATUS_COOLDOWN_MS, LINK_ALERT_AFTER_MS, LINK_FORCE_RECONNECT_AFTER_MS, LINK_STUCK_AFTER_MS, MAX_IMAGE_BYTES, MAX_FILE_BYTES;
 var init_daemon = __esm({
   "src/daemon.ts"() {
     "use strict";
@@ -137964,6 +137971,7 @@ var init_daemon = __esm({
     STATUS_COOLDOWN_MS = 6e4;
     LINK_ALERT_AFTER_MS = 9e4;
     LINK_FORCE_RECONNECT_AFTER_MS = 6e4;
+    LINK_STUCK_AFTER_MS = 3e5;
     MAX_IMAGE_BYTES = 10 * 1024 * 1024;
     MAX_FILE_BYTES = 30 * 1024 * 1024;
   }
