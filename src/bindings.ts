@@ -32,6 +32,12 @@ export interface Binding {
    * the group then keeps whatever name it got at creation, forever.
    */
   namedAs?: string | null;
+  /**
+   * The newest `say` card in this group, kept so the daemon can rewrite its
+   * footer when the turn ends. Persisted: a daemon restart mid-turn must not
+   * leave a card saying "还在跑" forever.
+   */
+  lastSay?: { messageId: string; body: string; title?: string; state: 'running' | 'done' | 'blocked' } | null;
 }
 
 export class BindingStore {
@@ -139,7 +145,7 @@ export class BindingStore {
   /** Refresh the fields a live call carries, without disturbing the binding. */
   touch(
     key: string,
-    patch: Partial<Pick<Binding, 'paneId' | 'away' | 'task' | 'notifyIdle' | 'idleMinMinutes' | 'namedAs'>>,
+    patch: Partial<Pick<Binding, 'paneId' | 'away' | 'task' | 'notifyIdle' | 'idleMinMinutes' | 'namedAs' | 'lastSay'>>,
   ): Binding | undefined {
     const b = this.map.get(key);
     if (!b) return undefined;
@@ -149,6 +155,7 @@ export class BindingStore {
     if (patch.idleMinMinutes !== undefined) b.idleMinMinutes = patch.idleMinMinutes;
     if (patch.task !== undefined) b.task = patch.task;
     if (patch.namedAs !== undefined) b.namedAs = patch.namedAs;
+    if (patch.lastSay !== undefined) b.lastSay = patch.lastSay;
     this.persist();
     return b;
   }

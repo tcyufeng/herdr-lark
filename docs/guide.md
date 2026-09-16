@@ -76,6 +76,12 @@ Field-by-field rules, exit codes, and how to write a question worth answering: [
 | 💬 | turquoise | `say` — a terminal reply, mirrored verbatim |
 | 📣 | light blue | `notify` — worth knowing, needs no reply |
 
+Every `say` card carries a footer saying **whose turn it is**: ⏳ "still running" is written at send time, and the daemon **rewrites it in place** to ✅ "done, over to you" once the turn ends — no second notification. A session parked on a prompt only a human can answer gets ⚠️ instead; replying in Feishu cannot clear that one, only walking back to the keyboard can.
+
+When one turn sends several cards, **only the newest one flips**. The earlier ones keep their ⏳, which is what they were when they were sent, so the last card is the only footer worth reading.
+
+The flip waits for three consecutive polls (15 s) with the pane not working: herdr reports `idle` between tool calls *inside* a turn, so a single reading proves nothing. "Over to you" therefore lands a few seconds late, which beats claiming a turn is over while it is still running.
+
 An `ask` button **locks the moment you tap it**: the closed card rides back on the tap's own callback, so there is no window in which a second tap is possible. An option marked `"danger": true` gets a red button behind a native confirm dialog — and **can never be the recommendation**; validation refuses it outright.
 
 ### The other direction: phone → terminal

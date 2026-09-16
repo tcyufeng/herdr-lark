@@ -169,8 +169,24 @@ export function askCard(ctx: AskCardContext): object {
 }
 
 /** A conversational reply: the terminal answer, mirrored verbatim. */
-export function sayCard(body: string, projectLabel: string, title?: string): object {
-  return card({ icon: '💬', title: title?.trim() || `[${projectLabel}]`, template: 'turquoise' }, [md(body)]);
+/**
+ * Whether the session that sent this reply is still mid-turn. A `say` card is
+ * a snapshot, but "is it my turn to answer" is a fact that changes after the
+ * card is sent — so the card carries the answer and the daemon rewrites it.
+ */
+export type TurnState = 'running' | 'done' | 'blocked';
+
+const TURN_FOOTER: Record<TurnState, string> = {
+  running: "<font color='grey'>⏳ 还在跑，这条不一定是结论</font>",
+  done: "<font color='green'>✅ 说完了，轮到你</font>",
+  blocked: "<font color='orange'>⚠️ 卡在终端里一个只有你能点的确认框上</font>",
+};
+
+export function sayCard(body: string, projectLabel: string, title?: string, state: TurnState = 'running'): object {
+  return card({ icon: '💬', title: title?.trim() || `[${projectLabel}]`, template: 'turquoise' }, [
+    md(body),
+    { tag: 'markdown', content: TURN_FOOTER[state], text_size: 'notation' },
+  ]);
 }
 
 export function notifyCard(p: NotifyPayload, projectLabel: string): object {

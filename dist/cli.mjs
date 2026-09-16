@@ -137041,6 +137041,7 @@ var init_bindings = __esm({
         if (patch.idleMinMinutes !== void 0) b.idleMinMinutes = patch.idleMinMinutes;
         if (patch.task !== void 0) b.task = patch.task;
         if (patch.namedAs !== void 0) b.namedAs = patch.namedAs;
+        if (patch.lastSay !== void 0) b.lastSay = patch.lastSay;
         this.persist();
         return b;
       }
@@ -137146,8 +137147,11 @@ ${optionLines(p.options, p.recommend, lang)}`),
     elements
   );
 }
-function sayCard(body, projectLabel2, title) {
-  return card({ icon: "\u{1F4AC}", title: title?.trim() || `[${projectLabel2}]`, template: "turquoise" }, [md(body)]);
+function sayCard(body, projectLabel2, title, state = "running") {
+  return card({ icon: "\u{1F4AC}", title: title?.trim() || `[${projectLabel2}]`, template: "turquoise" }, [
+    md(body),
+    { tag: "markdown", content: TURN_FOOTER[state], text_size: "notation" }
+  ]);
 }
 function notifyCard(p, projectLabel2) {
   return card({ icon: "\u{1F4E3}", title: `[${projectLabel2}] ${p.title}`, template: "wathet" }, [md(p.body)]);
@@ -137180,7 +137184,7 @@ function statusCard(projectLabel2, status, detail, lang = "zh") {
     [md(detail)]
   );
 }
-var TEXTS, t, md, hr, note, HEADER;
+var TEXTS, t, md, hr, note, HEADER, TURN_FOOTER;
 var init_cards = __esm({
   "src/cards.ts"() {
     "use strict";
@@ -137247,6 +137251,11 @@ var init_cards = __esm({
       answered: { template: "green", icon: "\u2705" },
       timedout: { template: "grey", icon: "\u231B" },
       cancelled: { template: "grey", icon: "\u26A0\uFE0F" }
+    };
+    TURN_FOOTER = {
+      running: "<font color='grey'>\u23F3 \u8FD8\u5728\u8DD1\uFF0C\u8FD9\u6761\u4E0D\u4E00\u5B9A\u662F\u7ED3\u8BBA</font>",
+      done: "<font color='green'>\u2705 \u8BF4\u5B8C\u4E86\uFF0C\u8F6E\u5230\u4F60</font>",
+      blocked: "<font color='orange'>\u26A0\uFE0F \u5361\u5728\u7EC8\u7AEF\u91CC\u4E00\u4E2A\u53EA\u6709\u4F60\u80FD\u70B9\u7684\u786E\u8BA4\u6846\u4E0A</font>"
     };
   }
 });
@@ -137326,6 +137335,7 @@ async function runDaemon() {
   }
   const pendings = /* @__PURE__ */ new Map();
   const lastStatus = /* @__PURE__ */ new Map();
+  const settledPolls = /* @__PURE__ */ new Map();
   const lastStatusPush = /* @__PURE__ */ new Map();
   const workingSince = /* @__PURE__ */ new Map();
   const lastOutbound = /* @__PURE__ */ new Map();
@@ -137385,6 +137395,26 @@ async function runDaemon() {
     }
   };
   const groupName = (project, task) => task ? `\u{1F916} ${project} \xB7 ${task}` : `\u{1F916} ${project}`;
+  const syncSayFooter = async (b, status) => {
+    const last = b.lastSay;
+    if (!last || last.state === "done") return;
+    if (!status || status === "working" || status === "unknown") {
+      settledPolls.set(b.key, 0);
+      return;
+    }
+    const settled = (settledPolls.get(b.key) ?? 0) + 1;
+    settledPolls.set(b.key, settled);
+    if (status !== "blocked" && settled < TURN_SETTLE_POLLS) return;
+    const state = status === "blocked" ? "blocked" : "done";
+    if (state === last.state) return;
+    try {
+      await channel.updateCard(last.messageId, sayCard(last.body, b.label, last.title, state));
+      log("say.footer", { key: b.key, state });
+    } catch (err) {
+      log("say.footer-failed", { key: b.key, err: String(err).slice(0, 160) });
+    }
+    bindings.touch(b.key, { lastSay: { ...last, state } });
+  };
   const renameChat = async (b, task) => {
     const name = groupName(b.label, task);
     try {
@@ -137560,6 +137590,7 @@ ${list}`;
       if (a && a.pane_id !== b.paneId) bindings.touch(b.key, { paneId: a.pane_id });
       const task = a?.terminal_title_stripped?.trim();
       if (task && groupName(b.label, task) !== b.namedAs) await renameChat(b, task);
+      await syncSayFooter(b, a?.agent_status);
     }
     const away = all.filter((b) => b.away && b.paneId);
     if (!away.length) return;
@@ -137911,7 +137942,11 @@ ${list}`;
           const text = req.text.trim();
           if (!text) return { ok: false, code: 1, message: "\u6CA1\u6709\u5185\u5BB9\u53EF\u53D1" };
           try {
-            await channel.send(b.chatId, { card: sayCard(text, b.label, req.title) });
+            const sent = await channel.send(b.chatId, { card: sayCard(text, b.label, req.title) });
+            settledPolls.set(b.key, 0);
+            bindings.touch(b.key, {
+              lastSay: { messageId: sent.messageId, body: text, title: req.title, state: "running" }
+            });
             markOutbound(b.key);
             log("say.sent", { key: b.key, chars: text.length });
             return { ok: true, kind: "ack" };
@@ -138009,7 +138044,7 @@ ${list}`;
     process.on(sig, () => void shutdown(sig));
   }
 }
-var INJECT_PREFIX, POLL_MS, STATUS_COOLDOWN_MS, LINK_ALERT_AFTER_MS, LINK_FORCE_RECONNECT_AFTER_MS, LINK_STUCK_AFTER_MS, INJECT_SUBMIT_WAIT_MS, MAX_IMAGE_BYTES, MAX_FILE_BYTES;
+var INJECT_PREFIX, POLL_MS, STATUS_COOLDOWN_MS, LINK_ALERT_AFTER_MS, LINK_FORCE_RECONNECT_AFTER_MS, LINK_STUCK_AFTER_MS, INJECT_SUBMIT_WAIT_MS, TURN_SETTLE_POLLS, MAX_IMAGE_BYTES, MAX_FILE_BYTES;
 var init_daemon = __esm({
   "src/daemon.ts"() {
     "use strict";
@@ -138028,6 +138063,7 @@ var init_daemon = __esm({
     LINK_FORCE_RECONNECT_AFTER_MS = 6e4;
     LINK_STUCK_AFTER_MS = 3e5;
     INJECT_SUBMIT_WAIT_MS = 8e3;
+    TURN_SETTLE_POLLS = 3;
     MAX_IMAGE_BYTES = 10 * 1024 * 1024;
     MAX_FILE_BYTES = 30 * 1024 * 1024;
   }

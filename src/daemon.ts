@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import type { Server } from 'node:net';
 import { createLarkChannel, type CardActionEvent, type LarkChannel, type NormalizedMessage } from '@larksuite/channel';
 import { BindingStore, type Binding } from './bindings.js';
-import { askCard, linkCard, notifyCard, receiptCard, sayCard, statusCard } from './cards.js';
+import { askCard, linkCard, notifyCard, receiptCard, sayCard, statusCard, type TurnState } from './cards.js';
 import { resolveCreds } from './creds.js';
 import { agentList, findPaneForProject, findPaneForSession, paneStarted, promptPane, sendKeys } from './herdr.js';
 import { serve, type Caller, type Request, type Response } from './ipc.js';
@@ -30,6 +30,13 @@ const LINK_FORCE_RECONNECT_AFTER_MS = 60_000;
 const LINK_STUCK_AFTER_MS = 300_000;
 /** How long to wait for the pane's agent to actually start on an injected message. */
 const INJECT_SUBMIT_WAIT_MS = 8_000;
+/**
+ * How many consecutive polls a session must spend not working before its turn
+ * counts as over. herdr reports `idle` between tool calls inside a single
+ * turn, so one reading proves nothing — this is the same flicker that made an
+ * earlier "you forgot to mirror" nudge fire on live conversations.
+ */
+const TURN_SETTLE_POLLS = 3;
 
 /** The log records ids and state transitions only — never message bodies. */
 function log(event: string, detail: Record<string, unknown> = {}): void {
@@ -129,6 +136,8 @@ export async function runDaemon(): Promise<void> {
   }
   const pendings = new Map<string, Pending>();
   const lastStatus = new Map<string, string>();
+  /** Consecutive polls in which a session has not been working. */
+  const settledPolls = new Map<string, number>();
   const lastStatusPush = new Map<string, number>();
   const workingSince = new Map<string, number>();
   /** When this session last sent anything to its group. */
@@ -217,6 +226,36 @@ export async function runDaemon(): Promise<void> {
   /** The group's name, so the chat list says which task it belongs to. */
   const groupName = (project: string, task: string | null): string =>
     task ? `🤖 ${project} · ${task}` : `🤖 ${project}`;
+
+  /**
+   * Rewrite the newest `say` card's footer once the turn behind it is over.
+   * Without this the human on the phone cannot tell "the agent is still
+   * working, more is coming" from "it is waiting for me" — every card looks
+   * identical, and several cards arriving from one turn make it worse.
+   */
+  const syncSayFooter = async (b: Binding, status: string | undefined): Promise<void> => {
+    const last = b.lastSay;
+    if (!last || last.state === 'done') return;
+    if (!status || status === 'working' || status === 'unknown') {
+      settledPolls.set(b.key, 0);
+      return;
+    }
+    const settled = (settledPolls.get(b.key) ?? 0) + 1;
+    settledPolls.set(b.key, settled);
+    // Blocked is not a flicker: the agent is parked on a prompt and will stay
+    // there until a human acts, so say so without waiting out the debounce.
+    if (status !== 'blocked' && settled < TURN_SETTLE_POLLS) return;
+    const state: TurnState = status === 'blocked' ? 'blocked' : 'done';
+    if (state === last.state) return;
+    try {
+      await channel.updateCard(last.messageId, sayCard(last.body, b.label, last.title, state));
+      log('say.footer', { key: b.key, state });
+    } catch (err) {
+      log('say.footer-failed', { key: b.key, err: String(err).slice(0, 160) });
+    }
+    // Record either way: retrying a failing patch every 5 s is noise.
+    bindings.touch(b.key, { lastSay: { ...last, state } });
+  };
 
   /**
    * Keep the group name in step with what the session is actually doing. After
@@ -470,6 +509,7 @@ export async function runDaemon(): Promise<void> {
       // recorded has no `namedAs`, so it gets one corrective rename.
       const task = a?.terminal_title_stripped?.trim();
       if (task && groupName(b.label, task) !== b.namedAs) await renameChat(b, task);
+      await syncSayFooter(b, a?.agent_status);
     }
 
     const away = all.filter((b) => b.away && b.paneId);
@@ -890,7 +930,13 @@ export async function runDaemon(): Promise<void> {
           const text = req.text.trim();
           if (!text) return { ok: false, code: 1, message: '没有内容可发' };
           try {
-            await channel.send(b.chatId, { card: sayCard(text, b.label, req.title) });
+            const sent = await channel.send(b.chatId, { card: sayCard(text, b.label, req.title) });
+            // Only the newest card is tracked. Earlier cards from the same turn
+            // keep their "still running" footer, which is what they were.
+            settledPolls.set(b.key, 0);
+            bindings.touch(b.key, {
+              lastSay: { messageId: sent.messageId, body: text, title: req.title, state: 'running' },
+            });
             markOutbound(b.key);
             log('say.sent', { key: b.key, chars: text.length });
             return { ok: true, kind: 'ack' };
