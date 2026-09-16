@@ -170,3 +170,61 @@ export function identifySession(root: string, project: string): SessionIdentity 
   id.title = me.terminal_title_stripped?.trim() || null;
   return id;
 }
+
+/**
+ * The visible tail of a pane, with the terminal's own furniture stripped off
+ * the bottom — status bar, input box, rules. Used as a fallback mirror when a
+ * session finished a turn without sending its reply to the group: raw output
+ * the human can read beats a card that only says "go look at your computer".
+ */
+/**
+ * The agent's input prompt. Everything from here down is the terminal's own
+ * chrome — the box rules around the input, the model/context/usage bar — and
+ * none of it belongs in a message to a phone.
+ */
+const PANE_PROMPT = /^\s*(?:❯|›)\s?/;
+/** Blank lines and box rules, the only things safe to shave blindly. */
+const PANE_RULE = /^\s*(?:─{3,}\s*)?$/;
+/** Hint lines the agent parks just above its input box. Best-effort, cosmetic. */
+const PANE_HINT = /^\s*(?:new task\?|✔ Update|.*\/clear to save |.*·\s*ctrl\+)/;
+
+export async function paneTail(paneId: string, keep = 24, maxChars = 2400): Promise<string | null> {
+  try {
+    // `recent-unwrapped` is the good source but herdr refuses it outright while
+    // the pane is working ('agent_not_idle') — and a session can start a new
+    // turn between the settle check and this read. `visible` always answers.
+    const read = async (source: string, lines: number): Promise<string> =>
+      (await execFileAsync('herdr', ['agent', 'read', paneId, '--source', source, '--lines', String(lines)], {
+        timeout: 10_000,
+        maxBuffer: 1024 * 1024,
+      })).stdout;
+    let stdout: string;
+    try {
+      stdout = await read('recent-unwrapped', 60);
+    } catch {
+      stdout = await read('visible', 60);
+    }
+    const lines = stdout.split('\n');
+    // Cut at the input prompt rather than shaving known chrome off the bottom.
+    // Shaving stops at the first line it does not recognise, so one unlisted
+    // status-bar line (`Usage …`) drags the whole bar into the message.
+    let cut = -1;
+    for (let i = lines.length - 1; i >= 0 && i >= lines.length - 15; i--) {
+      if (PANE_PROMPT.test(lines[i]!)) {
+        cut = i;
+        break;
+      }
+    }
+    if (cut > 0) {
+      while (cut > 0 && (PANE_RULE.test(lines[cut - 1]!) || PANE_HINT.test(lines[cut - 1]!))) cut -= 1;
+      lines.length = cut;
+    }
+    while (lines.length && (PANE_RULE.test(lines[lines.length - 1]!) || PANE_HINT.test(lines[lines.length - 1]!)))
+      lines.pop();
+    const tail = lines.slice(-keep).join('\n').trim();
+    if (!tail) return null;
+    return tail.length > maxChars ? `…（略去开头）\n${tail.slice(-maxChars)}` : tail;
+  } catch {
+    return null;
+  }
+}

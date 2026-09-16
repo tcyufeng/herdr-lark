@@ -124862,11 +124862,11 @@ ${code}
 ${lines.join("\n")}
 </todo>`, resources: [] };
     });
-    function extractPostPlainText2(blocks) {
-      if (!blocks)
+    function extractPostPlainText2(blocks2) {
+      if (!blocks2)
         return "";
       const lines = [];
-      for (const paragraph of blocks) {
+      for (const paragraph of blocks2) {
         if (!Array.isArray(paragraph))
           continue;
         const parts = [];
@@ -126873,10 +126873,10 @@ ${el.text ?? ""}
       return el.text ?? "";
   }
 }
-function extractPostPlainText(blocks) {
-  if (!blocks) return "";
+function extractPostPlainText(blocks2) {
+  if (!blocks2) return "";
   const lines = [];
-  for (const paragraph of blocks) {
+  for (const paragraph of blocks2) {
     if (!Array.isArray(paragraph)) continue;
     const parts = [];
     for (const el of paragraph) if (el.tag === "text" && el.text) parts.push(el.text);
@@ -135789,31 +135789,31 @@ var require_utf82 = __commonJS({
       WW: "\u2588",
       WB: "\u2580"
     };
-    function getBlockChar(top, bottom, blocks) {
-      if (top && bottom) return blocks.BB;
-      if (top && !bottom) return blocks.BW;
-      if (!top && bottom) return blocks.WB;
-      return blocks.WW;
+    function getBlockChar(top, bottom, blocks2) {
+      if (top && bottom) return blocks2.BB;
+      if (top && !bottom) return blocks2.BW;
+      if (!top && bottom) return blocks2.WB;
+      return blocks2.WW;
     }
     exports.render = function(qrData, options, cb) {
       const opts = Utils.getOptions(options);
-      let blocks = BLOCK_CHAR;
+      let blocks2 = BLOCK_CHAR;
       if (opts.color.dark.hex === "#ffffff" || opts.color.light.hex === "#000000") {
-        blocks = INVERTED_BLOCK_CHAR;
+        blocks2 = INVERTED_BLOCK_CHAR;
       }
       const size = qrData.modules.size;
       const data = qrData.modules.data;
       let output = "";
-      let hMargin = Array(size + opts.margin * 2 + 1).join(blocks.WW);
+      let hMargin = Array(size + opts.margin * 2 + 1).join(blocks2.WW);
       hMargin = Array(opts.margin / 2 + 1).join(hMargin + "\n");
-      const vMargin = Array(opts.margin + 1).join(blocks.WW);
+      const vMargin = Array(opts.margin + 1).join(blocks2.WW);
       output += hMargin;
       for (let i = 0; i < size; i += 2) {
         output += vMargin;
         for (let j = 0; j < size; j++) {
           const topModule = data[i * size + j];
           const bottomModule = data[(i + 1) * size + j];
-          output += getBlockChar(topModule, bottomModule, blocks);
+          output += getBlockChar(topModule, bottomModule, blocks2);
         }
         output += vMargin + "\n";
       }
@@ -136583,17 +136583,54 @@ function identifySession(root, project) {
   id.title = me.terminal_title_stripped?.trim() || null;
   return id;
 }
-var execFileAsync;
+async function paneTail(paneId, keep = 24, maxChars = 2400) {
+  try {
+    const read = async (source, lines2) => (await execFileAsync("herdr", ["agent", "read", paneId, "--source", source, "--lines", String(lines2)], {
+      timeout: 1e4,
+      maxBuffer: 1024 * 1024
+    })).stdout;
+    let stdout;
+    try {
+      stdout = await read("recent-unwrapped", 60);
+    } catch {
+      stdout = await read("visible", 60);
+    }
+    const lines = stdout.split("\n");
+    let cut = -1;
+    for (let i = lines.length - 1; i >= 0 && i >= lines.length - 15; i--) {
+      if (PANE_PROMPT.test(lines[i])) {
+        cut = i;
+        break;
+      }
+    }
+    if (cut > 0) {
+      while (cut > 0 && (PANE_RULE.test(lines[cut - 1]) || PANE_HINT.test(lines[cut - 1]))) cut -= 1;
+      lines.length = cut;
+    }
+    while (lines.length && (PANE_RULE.test(lines[lines.length - 1]) || PANE_HINT.test(lines[lines.length - 1])))
+      lines.pop();
+    const tail = lines.slice(-keep).join("\n").trim();
+    if (!tail) return null;
+    return tail.length > maxChars ? `\u2026\uFF08\u7565\u53BB\u5F00\u5934\uFF09
+${tail.slice(-maxChars)}` : tail;
+  } catch {
+    return null;
+  }
+}
+var execFileAsync, PANE_PROMPT, PANE_RULE, PANE_HINT;
 var init_herdr = __esm({
   "src/herdr.ts"() {
     "use strict";
     execFileAsync = promisify(execFile);
+    PANE_PROMPT = /^\s*(?:❯|›)\s?/;
+    PANE_RULE = /^\s*(?:─{3,}\s*)?$/;
+    PANE_HINT = /^\s*(?:new task\?|✔ Update|.*\/clear to save |.*·\s*ctrl\+)/;
   }
 });
 
 // src/paths.ts
 import { execFileSync as execFileSync3 } from "node:child_process";
-import { existsSync as existsSync2, mkdirSync as mkdirSync2, readFileSync as readFileSync2, renameSync as renameSync2, writeFileSync as writeFileSync2 } from "node:fs";
+import { existsSync as existsSync2, mkdirSync as mkdirSync2, readFileSync as readFileSync3, renameSync as renameSync2, writeFileSync as writeFileSync2 } from "node:fs";
 import { homedir as homedir2 } from "node:os";
 import { basename, join as join2, resolve } from "node:path";
 function homeDir() {
@@ -136622,7 +136659,7 @@ function projectLabel(root) {
 }
 function readProjectState(root) {
   try {
-    const raw = readFileSync2(projectStatePath(root), "utf8");
+    const raw = readFileSync3(projectStatePath(root), "utf8");
     const parsed = JSON.parse(raw);
     return {
       away: parsed.away === true,
@@ -136683,10 +136720,10 @@ __export(ipc_exports, {
   serve: () => serve
 });
 import { createConnection, createServer } from "node:net";
-import { existsSync as existsSync3, readFileSync as readFileSync3, unlinkSync as unlinkSync2 } from "node:fs";
+import { existsSync as existsSync3, readFileSync as readFileSync4, unlinkSync as unlinkSync2 } from "node:fs";
 function describeStalePid() {
   try {
-    const pid = Number(readFileSync3(pidPath(), "utf8").trim());
+    const pid = Number(readFileSync4(pidPath(), "utf8").trim());
     if (!pid) return "";
     try {
       process.kill(pid, 0);
@@ -136941,7 +136978,7 @@ var init_validate = __esm({
 });
 
 // src/bindings.ts
-import { readFileSync as readFileSync4, renameSync as renameSync3, writeFileSync as writeFileSync3 } from "node:fs";
+import { readFileSync as readFileSync5, renameSync as renameSync3, writeFileSync as writeFileSync3 } from "node:fs";
 var BindingStore;
 var init_bindings = __esm({
   "src/bindings.ts"() {
@@ -136954,7 +136991,7 @@ var init_bindings = __esm({
       }
       load() {
         try {
-          const raw = JSON.parse(readFileSync4(bindingsPath(), "utf8"));
+          const raw = JSON.parse(readFileSync5(bindingsPath(), "utf8"));
           for (const b of raw.bindings ?? []) {
             if (!b || typeof b.root !== "string" || typeof b.chatId !== "string") continue;
             b.notifyIdle = b.notifyIdle === true;
@@ -137156,6 +137193,20 @@ function sayCard(body, projectLabel2, title, state = "running") {
 function notifyCard(p, projectLabel2) {
   return card({ icon: "\u{1F4E3}", title: `[${projectLabel2}] ${p.title}`, template: "wathet" }, [md(p.body)]);
 }
+function missedMirrorCard(projectLabel2, task, tail) {
+  const head = task ? `**${task}**
+
+` : "";
+  const body = tail ? `${head}\u8FD9\u4E00\u8F6E\u7ED3\u675F\u4E86\uFF0C\u4F46\u5B83\u4E00\u4E2A\u5B57\u90FD\u6CA1\u53D1\u5230\u7FA4\u91CC\u3002\u4E0B\u9762\u662F**\u7EC8\u7AEF\u91CC\u7684\u539F\u6587**\uFF08\u76F4\u63A5\u6284\u7684\u7EC8\u7AEF\u8F93\u51FA\uFF0C\u4E0D\u662F\u5B83\u6574\u7406\u8FC7\u7684\uFF09\uFF1A
+
+\`\`\`
+${tail}
+\`\`\`` : `${head}\u8FD9\u4E00\u8F6E\u7ED3\u675F\u4E86\uFF0C\u4F46\u5B83\u4E00\u4E2A\u5B57\u90FD\u6CA1\u53D1\u5230\u7FA4\u91CC\uFF0C\u7EC8\u7AEF\u539F\u6587\u4E5F\u6CA1\u8BFB\u5230\u3002\u5F97\u56DE\u7535\u8111\u770B\u3002`;
+  return card({ icon: "\u{1F507}", title: `[${projectLabel2}] \u5B83\u6CA1\u628A\u56DE\u590D\u540C\u6B65\u8FC7\u6765`, template: "orange" }, [
+    md(body),
+    { tag: "markdown", content: "<font color='grey'>\u8981\u63A5\u7740\u8BF4\u5C31\u76F4\u63A5\u5728\u8FD9\u513F\u56DE</font>", text_size: "notation" }
+  ]);
+}
 function receiptCard(projectLabel2, why, lang = "zh") {
   const T = t(lang);
   return card({ icon: "\u26A0\uFE0F", title: `[${projectLabel2}] ${T.notDelivered}`, template: "orange" }, [
@@ -137268,7 +137319,7 @@ var daemon_exports = {};
 __export(daemon_exports, {
   runDaemon: () => runDaemon
 });
-import { appendFileSync, mkdirSync as mkdirSync3, readFileSync as readFileSync5, realpathSync, statSync as statSync2, writeFileSync as writeFileSync4, unlinkSync as unlinkSync3, existsSync as existsSync4 } from "node:fs";
+import { appendFileSync, mkdirSync as mkdirSync3, readFileSync as readFileSync6, realpathSync, statSync as statSync2, writeFileSync as writeFileSync4, unlinkSync as unlinkSync3, existsSync as existsSync4 } from "node:fs";
 import { createHash as createHash2, randomUUID as randomUUID2 } from "node:crypto";
 import { basename as basename2, join as join3, sep } from "node:path";
 import { tmpdir } from "node:os";
@@ -137314,7 +137365,7 @@ function resolveSendable(path2, root) {
   const cap = isImage ? MAX_IMAGE_BYTES : MAX_FILE_BYTES;
   if (st.size > cap)
     return { error: `\u6587\u4EF6\u592A\u5927\uFF1A${(st.size / 1024 / 1024).toFixed(1)} MB\uFF0C\u4E0A\u9650 ${cap / 1024 / 1024} MB` };
-  return { real, bytes: readFileSync5(real) };
+  return { real, bytes: readFileSync6(real) };
 }
 async function runDaemon() {
   const creds = resolveCreds();
@@ -137339,11 +137390,35 @@ async function runDaemon() {
   const pendings = /* @__PURE__ */ new Map();
   const lastStatus = /* @__PURE__ */ new Map();
   const settledPolls = /* @__PURE__ */ new Map();
+  const lastInject = /* @__PURE__ */ new Map();
+  const missAlerted = /* @__PURE__ */ new Map();
   const lastStatusPush = /* @__PURE__ */ new Map();
   const workingSince = /* @__PURE__ */ new Map();
   const lastOutbound = /* @__PURE__ */ new Map();
   const markOutbound = (key) => {
     lastOutbound.set(key, Date.now());
+  };
+  const sendSay = async (b, text, title) => {
+    try {
+      const prev = b.lastSay;
+      const sent = await channel.send(b.chatId, { card: sayCard(text, b.label, title) });
+      settledPolls.set(b.key, 0);
+      bindings.touch(b.key, {
+        lastSay: { messageId: sent.messageId, body: text, title, state: "running" }
+      });
+      if (prev) {
+        try {
+          await channel.updateCard(prev.messageId, sayCard(prev.body, b.label, prev.title, "superseded"));
+        } catch (err) {
+          log("say.supersede-failed", { key: b.key, err: String(err).slice(0, 160) });
+        }
+      }
+      markOutbound(b.key);
+      log("say.sent", { key: b.key, chars: text.length });
+      return { ok: true, kind: "ack" };
+    } catch (err) {
+      return { ok: false, code: 3, message: `\u53D1\u9001\u5931\u8D25\uFF1A${err instanceof Error ? err.message : String(err)}` };
+    }
   };
   const startedAt = (/* @__PURE__ */ new Date()).toISOString();
   const channel = createLarkChannel({
@@ -137398,15 +137473,10 @@ async function runDaemon() {
     }
   };
   const groupName = (project, task) => task ? `\u{1F916} ${project} \xB7 ${task}` : `\u{1F916} ${project}`;
-  const syncSayFooter = async (b, status) => {
+  const syncSayFooter = async (b, status, settled) => {
     const last = b.lastSay;
     if (!last || last.state === "done") return;
-    if (!status || status === "working" || status === "unknown") {
-      settledPolls.set(b.key, 0);
-      return;
-    }
-    const settled = (settledPolls.get(b.key) ?? 0) + 1;
-    settledPolls.set(b.key, settled);
+    if (!settled) return;
     if (status !== "blocked" && settled < TURN_SETTLE_POLLS) return;
     const state = status === "blocked" ? "blocked" : "done";
     if (state === last.state) return;
@@ -137417,6 +137487,22 @@ async function runDaemon() {
       log("say.footer-failed", { key: b.key, err: String(err).slice(0, 160) });
     }
     bindings.touch(b.key, { lastSay: { ...last, state } });
+  };
+  const alertMissedMirror = async (b, paneId, settled) => {
+    if (!b.away || !paneId || settled < TURN_SETTLE_POLLS) return;
+    const injected = lastInject.get(b.key);
+    if (!injected) return;
+    if ((lastOutbound.get(b.key) ?? 0) > injected) return;
+    if (missAlerted.get(b.key) === injected) return;
+    missAlerted.set(b.key, injected);
+    const tail = await paneTail(paneId);
+    try {
+      await channel.send(b.chatId, { card: missedMirrorCard(b.label, b.task, tail) });
+      markOutbound(b.key);
+      log("mirror.missed", { key: b.key, hadTail: !!tail });
+    } catch (err) {
+      log("mirror.missed-failed", { key: b.key, err: String(err).slice(0, 160) });
+    }
   };
   const renameChat = async (b, task) => {
     const name = groupName(b.label, task);
@@ -137473,12 +137559,13 @@ async function runDaemon() {
         if (started) outcome = { ok: true };
       }
     }
+    if (outcome.ok) lastInject.set(b.key, Date.now());
     log("inject", { key: b.key, paneId, ok: outcome.ok, code: outcome.code });
     if (!outcome.ok) await receipt(b, explainPromptFailure(outcome.code, outcome.message));
   };
   const transcribe = async (audioPath) => {
     try {
-      const b64 = readFileSync5(audioPath).toString("base64");
+      const b64 = readFileSync6(audioPath).toString("base64");
       const res = await channel.rawClient.speech_to_text.speech.fileRecognize({
         data: {
           speech: { speech: b64 },
@@ -137593,7 +137680,11 @@ ${list}`;
       if (a && a.pane_id !== b.paneId) bindings.touch(b.key, { paneId: a.pane_id });
       const task = a?.terminal_title_stripped?.trim();
       if (task && groupName(b.label, task) !== b.namedAs) await renameChat(b, task);
-      await syncSayFooter(b, a?.agent_status);
+      const status = a?.agent_status;
+      const settled = !status || status === "working" || status === "unknown" ? 0 : (settledPolls.get(b.key) ?? 0) + 1;
+      settledPolls.set(b.key, settled);
+      await syncSayFooter(b, status, settled);
+      await alertMissedMirror(b, a?.pane_id ?? null, settled);
     }
     const away = all.filter((b) => b.away && b.paneId);
     if (!away.length) return;
@@ -137944,26 +138035,23 @@ ${list}`;
           if (!b) return { ok: false, code: 4, message: "\u8FD9\u4E2A\u9879\u76EE\u8FD8\u6CA1 bind\uFF0C\u5148\u8DD1 herdr-lark away on" };
           const text = req.text.trim();
           if (!text) return { ok: false, code: 1, message: "\u6CA1\u6709\u5185\u5BB9\u53EF\u53D1" };
-          try {
-            const prev = b.lastSay;
-            const sent = await channel.send(b.chatId, { card: sayCard(text, b.label, req.title) });
-            settledPolls.set(b.key, 0);
-            bindings.touch(b.key, {
-              lastSay: { messageId: sent.messageId, body: text, title: req.title, state: "running" }
-            });
-            if (prev) {
-              try {
-                await channel.updateCard(prev.messageId, sayCard(prev.body, b.label, prev.title, "superseded"));
-              } catch (err) {
-                log("say.supersede-failed", { key: b.key, err: String(err).slice(0, 160) });
-              }
-            }
-            markOutbound(b.key);
-            log("say.sent", { key: b.key, chars: text.length });
+          return sendSay(b, text, req.title);
+        }
+        // The Stop hook's mirror. Same card as `say`, but it declines rather
+        // than duplicates: the agent may already have followed the rule this
+        // turn, and two copies of one answer are worse than none.
+        case "mirror": {
+          const b = bindings.touch(req.caller.key, { paneId: req.caller.paneId });
+          if (!b) return { ok: true, kind: "ack" };
+          if (!b.away) return { ok: true, kind: "ack" };
+          if ((lastOutbound.get(b.key) ?? 0) >= req.turnStartedAt) {
+            log("mirror.skipped", { key: b.key, why: "already mirrored this turn" });
             return { ok: true, kind: "ack" };
-          } catch (err) {
-            return { ok: false, code: 3, message: `\u53D1\u9001\u5931\u8D25\uFF1A${err instanceof Error ? err.message : String(err)}` };
           }
+          const text = req.text.trim();
+          if (!text) return { ok: true, kind: "ack" };
+          log("mirror.hook", { key: b.key, chars: text.length });
+          return sendSay(b, text);
         }
         case "sendFile": {
           const b = bindings.touch(req.caller.key, { paneId: req.caller.paneId, task: req.caller.task });
@@ -138086,12 +138174,58 @@ var import_qrcode = __toESM(require_lib3(), 1);
 init_creds();
 init_creds();
 init_herdr();
+import { spawn } from "node:child_process";
+import { existsSync as existsSync5, openSync, readFileSync as readFileSync7, realpathSync as realpathSync2, unlinkSync as unlinkSync4 } from "node:fs";
+import { fileURLToPath } from "node:url";
+
+// src/transcript.ts
+import { readFileSync as readFileSync2 } from "node:fs";
+var blocks = (line) => {
+  const c = line.message?.content;
+  return Array.isArray(c) ? c : [];
+};
+var isTurnStart = (line) => {
+  if (line.type !== "user" || line.isSidechain) return false;
+  if (typeof line.message?.content === "string") return true;
+  return blocks(line).some((b) => b.type !== "tool_result");
+};
+function lastTurn(transcriptPath) {
+  let raw;
+  try {
+    raw = readFileSync2(transcriptPath, "utf8");
+  } catch {
+    return null;
+  }
+  const lines = [];
+  for (const ln of raw.split("\n")) {
+    if (!ln.trim()) continue;
+    try {
+      lines.push(JSON.parse(ln));
+    } catch {
+    }
+  }
+  let start = -1;
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    if (isTurnStart(lines[i])) {
+      start = i;
+      break;
+    }
+  }
+  if (start < 0) return null;
+  const said = [];
+  for (const line of lines.slice(start + 1)) {
+    if (line.type !== "assistant" || line.isSidechain) continue;
+    for (const b of blocks(line)) if (b.type === "text" && b.text?.trim()) said.push(b.text.trim());
+  }
+  if (!said.length) return null;
+  const startedAt = Date.parse(lines[start].timestamp ?? "") || Date.now();
+  return { text: said.join("\n\n"), startedAt };
+}
+
+// src/cli.ts
 init_ipc();
 init_paths();
 init_validate();
-import { spawn } from "node:child_process";
-import { existsSync as existsSync5, openSync, readFileSync as readFileSync6, realpathSync as realpathSync2, unlinkSync as unlinkSync4 } from "node:fs";
-import { fileURLToPath } from "node:url";
 for (const stream of [process.stdout, process.stderr]) {
   stream.on("error", (err) => {
     if (err.code === "EPIPE") process.exit(0);
@@ -138112,6 +138246,9 @@ var HELP = `herdr-lark \u2014 \u628A herdr \u91CC\u8DD1\u7740\u7684 agent \u4F1A
   away on|off [--all] [--idle [\u5206\u949F]]  \u8FDC\u7A0B\u6A21\u5F0F\uFF08\u6309\u4F1A\u8BDD\uFF0C\u4E0D\u6309\u76EE\u5F55\uFF09\uFF1B--all \u4E00\u6B21\u7BA1\u6240\u6709\u4F1A\u8BDD
   away status [--json]               \u770B\u5F53\u524D\u4F1A\u8BDD\u7684\u5F00\u5173\u72B6\u6001
   status                             daemon \u4E0E\u7ED1\u5B9A\u6982\u89C8
+  mirror                             Claude Code \u7684 Stop \u94A9\u5B50\u4E13\u7528\uFF1A\u4ECE stdin \u8BFB\u94A9\u5B50 JSON\uFF0C
+                                     \u628A\u521A\u7ED3\u675F\u90A3\u4E00\u8F6E\u7684\u539F\u6587\u540C\u6B65\u5230\u7FA4\uFF08\u5DF2\u540C\u6B65\u8FC7\u5C31\u8DF3\u8FC7\uFF09\u3002
+                                     \u4E0D\u8981\u624B\u5DE5\u8C03\u7528\uFF0C\u89C1 examples/hooks/\u3002
 
 \u9000\u51FA\u7801\uFF1A0 \u6210\u529F \xB7 1 \u8F93\u5165\u6709\u95EE\u9898 \xB7 2 \u8D85\u65F6\u6CA1\u4EBA\u56DE\u7B54 \xB7 3 \u901A\u9053\u6545\u969C \xB7 4 \u9700\u8981\u4EBA\u52A8\u624B
 `;
@@ -138355,7 +138492,7 @@ async function cmdDaemon(args) {
     if (!res.ok) die(3, res.message);
     let pid = 0;
     try {
-      pid = Number(readFileSync6(pidPath(), "utf8").trim()) || 0;
+      pid = Number(readFileSync7(pidPath(), "utf8").trim()) || 0;
     } catch {
     }
     const alive = () => {
@@ -138471,6 +138608,33 @@ async function cmdSay(args) {
   if (!text.trim()) die(1, "\u6CA1\u6709\u5185\u5BB9\u53EF\u53D1\uFF08\u4ECE stdin \u8BFB\u6B63\u6587\uFF09");
   const res = await request({ type: "say", caller: c, text, title: opt(args, "title") });
   finish(res, () => process.stdout.write("\u5DF2\u540C\u6B65\u5230\u98DE\u4E66\u7FA4\n"));
+}
+async function cmdMirror() {
+  try {
+    const payload = JSON.parse(await readStdin());
+    if (payload.hook_event_name !== "Stop" || payload.agent_id) return;
+    if (!payload.transcript_path || !payload.session_id) return;
+    const turn = lastTurn(payload.transcript_path);
+    if (!turn) return;
+    const root = projectRoot();
+    await request(
+      {
+        type: "mirror",
+        caller: {
+          key: `sess:${payload.session_id}`,
+          sessionId: payload.session_id,
+          root,
+          project: projectLabel(root),
+          task: null,
+          paneId: currentPaneId()
+        },
+        text: turn.text,
+        turnStartedAt: turn.startedAt
+      },
+      { timeoutMs: 15e3 }
+    );
+  } catch {
+  }
 }
 async function cmdSendFile(args) {
   const c = caller();
@@ -138601,6 +138765,8 @@ async function main() {
       return cmdNotify();
     case "say":
       return cmdSay(args);
+    case "mirror":
+      return cmdMirror();
     case "send-file":
       return cmdSendFile(args);
     case "away":

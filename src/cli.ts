@@ -7,6 +7,7 @@ import QRCode from 'qrcode';
 import { clearCreds, credsReport, defaultStore, resolveCreds, writeCreds, type StoreKind } from './creds.js';
 import { envFile } from './creds.js';
 import { currentPaneId, identifySession, insideHerdr } from './herdr.js';
+import { lastTurn } from './transcript.js';
 import { isDaemonListening, request, type Caller, type Response } from './ipc.js';
 import { ensureHomeDir, logPath, pidPath, projectLabel, projectRoot, readProjectState, sockPath, writeProjectState } from './paths.js';
 import { validateAsk, validateNotify, ValidationError } from './validate.js';
@@ -34,6 +35,9 @@ const HELP = `herdr-lark — 把 herdr 里跑着的 agent 会话接到飞书
   away on|off [--all] [--idle [分钟]]  远程模式（按会话，不按目录）；--all 一次管所有会话
   away status [--json]               看当前会话的开关状态
   status                             daemon 与绑定概览
+  mirror                             Claude Code 的 Stop 钩子专用：从 stdin 读钩子 JSON，
+                                     把刚结束那一轮的原文同步到群（已同步过就跳过）。
+                                     不要手工调用，见 examples/hooks/。
 
 退出码：0 成功 · 1 输入有问题 · 2 超时没人回答 · 3 通道故障 · 4 需要人动手
 `;
@@ -448,6 +452,54 @@ async function cmdSay(args: string[]): Promise<void> {
   finish(res, () => process.stdout.write('已同步到飞书群\n'));
 }
 
+/**
+ * Claude Code `Stop` hook: mirror the turn that just ended.
+ *
+ * The mirroring rule asks the agent to copy its own answer into a tool call
+ * *before* it finishes speaking — but finishing speaking is the end of the
+ * turn, so there is nothing after it to hang the copy on, and a busy session
+ * simply writes the answer and stops. This runs at the one moment the harness
+ * does have a hook, and takes the text from the transcript, so the group gets
+ * the real reply rather than a screenshot of the terminal.
+ *
+ * Exits 0 whatever happens. A hook that fails loudly on every unrelated
+ * session is worse than no hook.
+ */
+async function cmdMirror(): Promise<void> {
+  try {
+    const payload = JSON.parse(await readStdin()) as {
+      hook_event_name?: string;
+      session_id?: string;
+      transcript_path?: string;
+      agent_id?: string;
+    };
+    // Subagents have their own transcript and never reached the human's pane.
+    if (payload.hook_event_name !== 'Stop' || payload.agent_id) return;
+    if (!payload.transcript_path || !payload.session_id) return;
+    const turn = lastTurn(payload.transcript_path);
+    if (!turn) return;
+    const root = projectRoot();
+    await request(
+      {
+        type: 'mirror',
+        caller: {
+          key: `sess:${payload.session_id}`,
+          sessionId: payload.session_id,
+          root,
+          project: projectLabel(root),
+          task: null,
+          paneId: currentPaneId(),
+        },
+        text: turn.text,
+        turnStartedAt: turn.startedAt,
+      },
+      { timeoutMs: 15_000 },
+    );
+  } catch {
+    // Nothing a hook can usefully say to a human who is not watching.
+  }
+}
+
 async function cmdSendFile(args: string[]): Promise<void> {
   const c = caller();
   const root = c.root;
@@ -584,6 +636,8 @@ async function main(): Promise<void> {
       return cmdNotify();
     case 'say':
       return cmdSay(args);
+    case 'mirror':
+      return cmdMirror();
     case 'send-file':
       return cmdSendFile(args);
     case 'away':

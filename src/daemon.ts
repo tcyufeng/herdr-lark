@@ -5,9 +5,9 @@ import { tmpdir } from 'node:os';
 import type { Server } from 'node:net';
 import { createLarkChannel, type CardActionEvent, type LarkChannel, type NormalizedMessage } from '@larksuite/channel';
 import { BindingStore, type Binding } from './bindings.js';
-import { askCard, linkCard, notifyCard, receiptCard, sayCard, statusCard, type TurnState } from './cards.js';
+import { askCard, linkCard, missedMirrorCard, notifyCard, receiptCard, sayCard, statusCard, type TurnState } from './cards.js';
 import { resolveCreds } from './creds.js';
-import { agentList, findPaneForProject, findPaneForSession, paneStarted, promptPane, sendKeys } from './herdr.js';
+import { agentList, findPaneForProject, findPaneForSession, paneStarted, paneTail, promptPane, sendKeys } from './herdr.js';
 import { serve, type Caller, type Request, type Response } from './ipc.js';
 import { ensureHomeDir, homeDir, logPath, pidPath, sockPath } from './paths.js';
 import { validateAsk, validateNotify, ValidationError, type AskPayload } from './validate.js';
@@ -138,6 +138,10 @@ export async function runDaemon(): Promise<void> {
   const lastStatus = new Map<string, string>();
   /** Consecutive polls in which a session has not been working. */
   const settledPolls = new Map<string, number>();
+  /** When a phone message was last delivered into each session's pane. */
+  const lastInject = new Map<string, number>();
+  /** The inject a missed-mirror card has already been sent for. */
+  const missAlerted = new Map<string, number>();
   const lastStatusPush = new Map<string, number>();
   const workingSince = new Map<string, number>();
   /** When this session last sent anything to its group. */
@@ -150,6 +154,34 @@ export async function runDaemon(): Promise<void> {
   const markOutbound = (key: string): void => {
     lastOutbound.set(key, Date.now());
   };
+  /** Send one reply card, superseding whatever card held the state before it. */
+  const sendSay = async (b: Binding, text: string, title?: string): Promise<Response> => {
+    try {
+      const prev = b.lastSay;
+      const sent = await channel.send(b.chatId, { card: sayCard(text, b.label, title) });
+      settledPolls.set(b.key, 0);
+      bindings.touch(b.key, {
+        lastSay: { messageId: sent.messageId, body: text, title, state: 'running' },
+      });
+      // Only the newest card may claim a state. A background task can wake the
+      // session a minute after its turn ended, so a card that legitimately
+      // said "over to you" is not wrong — it is just no longer the one to
+      // read, and leaving it green contradicts that.
+      if (prev) {
+        try {
+          await channel.updateCard(prev.messageId, sayCard(prev.body, b.label, prev.title, 'superseded'));
+        } catch (err) {
+          log('say.supersede-failed', { key: b.key, err: String(err).slice(0, 160) });
+        }
+      }
+      markOutbound(b.key);
+      log('say.sent', { key: b.key, chars: text.length });
+      return { ok: true, kind: 'ack' };
+    } catch (err) {
+      return { ok: false, code: 3, message: `发送失败：${err instanceof Error ? err.message : String(err)}` };
+    }
+  };
+
   const startedAt = new Date().toISOString();
 
   const channel: LarkChannel = createLarkChannel({
@@ -233,15 +265,10 @@ export async function runDaemon(): Promise<void> {
    * working, more is coming" from "it is waiting for me" — every card looks
    * identical, and several cards arriving from one turn make it worse.
    */
-  const syncSayFooter = async (b: Binding, status: string | undefined): Promise<void> => {
+  const syncSayFooter = async (b: Binding, status: string | undefined, settled: number): Promise<void> => {
     const last = b.lastSay;
     if (!last || last.state === 'done') return;
-    if (!status || status === 'working' || status === 'unknown') {
-      settledPolls.set(b.key, 0);
-      return;
-    }
-    const settled = (settledPolls.get(b.key) ?? 0) + 1;
-    settledPolls.set(b.key, settled);
+    if (!settled) return;
     // Blocked is not a flicker: the agent is parked on a prompt and will stay
     // there until a human acts, so say so without waiting out the debounce.
     if (status !== 'blocked' && settled < TURN_SETTLE_POLLS) return;
@@ -255,6 +282,31 @@ export async function runDaemon(): Promise<void> {
     }
     // Record either way: retrying a failing patch every 5 s is noise.
     bindings.touch(b.key, { lastSay: { ...last, state } });
+  };
+
+  /**
+   * A turn that ended without a single `say` means the human on the phone got
+   * nothing while the terminal filled up with the answer. Nothing in the
+   * program can make the agent follow the mirroring rule — but the human can
+   * be told, and unlike the reminder this replaces, telling them happens on
+   * their phone instead of inside the conversation they are having.
+   */
+  const alertMissedMirror = async (b: Binding, paneId: string | null, settled: number): Promise<void> => {
+    if (!b.away || !paneId || settled < TURN_SETTLE_POLLS) return;
+    const injected = lastInject.get(b.key);
+    if (!injected) return;
+    // Something did go out after the message arrived: the rule was followed.
+    if ((lastOutbound.get(b.key) ?? 0) > injected) return;
+    if (missAlerted.get(b.key) === injected) return;
+    missAlerted.set(b.key, injected);
+    const tail = await paneTail(paneId);
+    try {
+      await channel.send(b.chatId, { card: missedMirrorCard(b.label, b.task, tail) });
+      markOutbound(b.key);
+      log('mirror.missed', { key: b.key, hadTail: !!tail });
+    } catch (err) {
+      log('mirror.missed-failed', { key: b.key, err: String(err).slice(0, 160) });
+    }
   };
 
   /**
@@ -342,6 +394,7 @@ export async function runDaemon(): Promise<void> {
         if (started) outcome = { ok: true };
       }
     }
+    if (outcome.ok) lastInject.set(b.key, Date.now());
     log('inject', { key: b.key, paneId, ok: outcome.ok, code: outcome.code });
     if (!outcome.ok) await receipt(b, explainPromptFailure(outcome.code, outcome.message));
   };
@@ -509,7 +562,12 @@ export async function runDaemon(): Promise<void> {
       // recorded has no `namedAs`, so it gets one corrective rename.
       const task = a?.terminal_title_stripped?.trim();
       if (task && groupName(b.label, task) !== b.namedAs) await renameChat(b, task);
-      await syncSayFooter(b, a?.agent_status);
+      const status = a?.agent_status;
+      const settled =
+        !status || status === 'working' || status === 'unknown' ? 0 : (settledPolls.get(b.key) ?? 0) + 1;
+      settledPolls.set(b.key, settled);
+      await syncSayFooter(b, status, settled);
+      await alertMissedMirror(b, a?.pane_id ?? null, settled);
     }
 
     const away = all.filter((b) => b.away && b.paneId);
@@ -929,30 +987,26 @@ export async function runDaemon(): Promise<void> {
           if (!b) return { ok: false, code: 4, message: '这个项目还没 bind，先跑 herdr-lark away on' };
           const text = req.text.trim();
           if (!text) return { ok: false, code: 1, message: '没有内容可发' };
-          try {
-            const prev = b.lastSay;
-            const sent = await channel.send(b.chatId, { card: sayCard(text, b.label, req.title) });
-            settledPolls.set(b.key, 0);
-            bindings.touch(b.key, {
-              lastSay: { messageId: sent.messageId, body: text, title: req.title, state: 'running' },
-            });
-            // Only the newest card may claim a state. A background task can
-            // wake the session a minute after its turn ended, so a card that
-            // legitimately said "over to you" is not wrong — it is just no
-            // longer the one to read, and leaving it green contradicts that.
-            if (prev) {
-              try {
-                await channel.updateCard(prev.messageId, sayCard(prev.body, b.label, prev.title, 'superseded'));
-              } catch (err) {
-                log('say.supersede-failed', { key: b.key, err: String(err).slice(0, 160) });
-              }
-            }
-            markOutbound(b.key);
-            log('say.sent', { key: b.key, chars: text.length });
+          return sendSay(b, text, req.title);
+        }
+
+        // The Stop hook's mirror. Same card as `say`, but it declines rather
+        // than duplicates: the agent may already have followed the rule this
+        // turn, and two copies of one answer are worse than none.
+        case 'mirror': {
+          // No `task` here: the hook has no terminal title to offer, and
+          // writing null would wipe the one the group is named after.
+          const b = bindings.touch(req.caller.key, { paneId: req.caller.paneId });
+          if (!b) return { ok: true, kind: 'ack' };
+          if (!b.away) return { ok: true, kind: 'ack' };
+          if ((lastOutbound.get(b.key) ?? 0) >= req.turnStartedAt) {
+            log('mirror.skipped', { key: b.key, why: 'already mirrored this turn' });
             return { ok: true, kind: 'ack' };
-          } catch (err) {
-            return { ok: false, code: 3, message: `发送失败：${err instanceof Error ? err.message : String(err)}` };
           }
+          const text = req.text.trim();
+          if (!text) return { ok: true, kind: 'ack' };
+          log('mirror.hook', { key: b.key, chars: text.length });
+          return sendSay(b, text);
         }
 
         case 'sendFile': {

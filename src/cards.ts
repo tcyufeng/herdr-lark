@@ -196,6 +196,26 @@ export function notifyCard(p: NotifyPayload, projectLabel: string): object {
   return card({ icon: '📣', title: `[${projectLabel}] ${p.title}`, template: 'wathet' }, [md(p.body)]);
 }
 
+/**
+ * A turn ended and the session never mirrored a word of it. The rule that
+ * every reply goes to the group is the agent's to follow, and an agent that
+ * forgets fails silently — the human just sits there. An earlier version told
+ * the *agent* by injecting a reminder into the pane, which interrupted the
+ * very conversation it was protecting. This tells the *human* instead, on the
+ * device they are actually holding, and carries the terminal's own output so
+ * the card is worth something on its own.
+ */
+export function missedMirrorCard(projectLabel: string, task: string | null, tail: string | null): object {
+  const head = task ? `**${task}**\n\n` : '';
+  const body = tail
+    ? `${head}这一轮结束了，但它一个字都没发到群里。下面是**终端里的原文**（直接抄的终端输出，不是它整理过的）：\n\n\`\`\`\n${tail}\n\`\`\``
+    : `${head}这一轮结束了，但它一个字都没发到群里，终端原文也没读到。得回电脑看。`;
+  return card({ icon: '🔇', title: `[${projectLabel}] 它没把回复同步过来`, template: 'orange' }, [
+    md(body),
+    { tag: 'markdown', content: "<font color='grey'>要接着说就直接在这儿回</font>", text_size: 'notation' },
+  ]);
+}
+
 /** Sent into the group when a phone message could not reach the terminal. */
 export function receiptCard(projectLabel: string, why: string, lang: Lang = 'zh'): object {
   const T = t(lang);
