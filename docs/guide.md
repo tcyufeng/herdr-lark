@@ -78,7 +78,7 @@ Field-by-field rules, exit codes, and how to write a question worth answering: [
 
 Every `say` card carries a footer saying **whose turn it is**: ⏳ "still running" is written at send time, and the daemon **rewrites it in place** to ✅ "done, over to you" once the turn ends — no second notification. A session parked on a prompt only a human can answer gets ⚠️ instead; replying in Feishu cannot clear that one, only walking back to the keyboard can.
 
-When one turn sends several cards, **only the newest one flips**. The earlier ones keep their ⏳, which is what they were when they were sent, so the last card is the only footer worth reading.
+**Only the newest card carries a state.** Sending a new one immediately demotes the previous card's footer to "↓ there is a newer one below" — including a card that had already gone green. A background task can wake the session a minute after its turn ended; that green was not wrong when it was written, but it is no longer the card to read, and leaving it claiming "over to you" misleads. Read the last card, always.
 
 The flip waits for three consecutive polls (15 s) with the pane not working: herdr reports `idle` between tool calls *inside* a turn, so a single reading proves nothing. "Over to you" therefore lands a few seconds late, which beats claiming a turn is over while it is still running.
 

@@ -174,12 +174,15 @@ export function askCard(ctx: AskCardContext): object {
  * a snapshot, but "is it my turn to answer" is a fact that changes after the
  * card is sent — so the card carries the answer and the daemon rewrites it.
  */
-export type TurnState = 'running' | 'done' | 'blocked';
+export type TurnState = 'running' | 'done' | 'blocked' | 'superseded';
 
 const TURN_FOOTER: Record<TurnState, string> = {
   running: "<font color='grey'>⏳ 还在跑，这条不一定是结论</font>",
   done: "<font color='green'>✅ 说完了，轮到你</font>",
   blocked: "<font color='orange'>⚠️ 卡在终端里一个只有你能点的确认框上</font>",
+  // Any card but the newest. Its own state is history and saying "over to you"
+  // on a card that has already been answered by a later one is a lie.
+  superseded: "<font color='grey'>↓ 这条之后还有新的</font>",
 };
 
 export function sayCard(body: string, projectLabel: string, title?: string, state: TurnState = 'running'): object {

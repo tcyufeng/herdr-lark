@@ -930,13 +930,23 @@ export async function runDaemon(): Promise<void> {
           const text = req.text.trim();
           if (!text) return { ok: false, code: 1, message: '没有内容可发' };
           try {
+            const prev = b.lastSay;
             const sent = await channel.send(b.chatId, { card: sayCard(text, b.label, req.title) });
-            // Only the newest card is tracked. Earlier cards from the same turn
-            // keep their "still running" footer, which is what they were.
             settledPolls.set(b.key, 0);
             bindings.touch(b.key, {
               lastSay: { messageId: sent.messageId, body: text, title: req.title, state: 'running' },
             });
+            // Only the newest card may claim a state. A background task can
+            // wake the session a minute after its turn ended, so a card that
+            // legitimately said "over to you" is not wrong — it is just no
+            // longer the one to read, and leaving it green contradicts that.
+            if (prev) {
+              try {
+                await channel.updateCard(prev.messageId, sayCard(prev.body, b.label, prev.title, 'superseded'));
+              } catch (err) {
+                log('say.supersede-failed', { key: b.key, err: String(err).slice(0, 160) });
+              }
+            }
             markOutbound(b.key);
             log('say.sent', { key: b.key, chars: text.length });
             return { ok: true, kind: 'ack' };

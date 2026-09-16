@@ -137255,7 +137255,10 @@ var init_cards = __esm({
     TURN_FOOTER = {
       running: "<font color='grey'>\u23F3 \u8FD8\u5728\u8DD1\uFF0C\u8FD9\u6761\u4E0D\u4E00\u5B9A\u662F\u7ED3\u8BBA</font>",
       done: "<font color='green'>\u2705 \u8BF4\u5B8C\u4E86\uFF0C\u8F6E\u5230\u4F60</font>",
-      blocked: "<font color='orange'>\u26A0\uFE0F \u5361\u5728\u7EC8\u7AEF\u91CC\u4E00\u4E2A\u53EA\u6709\u4F60\u80FD\u70B9\u7684\u786E\u8BA4\u6846\u4E0A</font>"
+      blocked: "<font color='orange'>\u26A0\uFE0F \u5361\u5728\u7EC8\u7AEF\u91CC\u4E00\u4E2A\u53EA\u6709\u4F60\u80FD\u70B9\u7684\u786E\u8BA4\u6846\u4E0A</font>",
+      // Any card but the newest. Its own state is history and saying "over to you"
+      // on a card that has already been answered by a later one is a lie.
+      superseded: "<font color='grey'>\u2193 \u8FD9\u6761\u4E4B\u540E\u8FD8\u6709\u65B0\u7684</font>"
     };
   }
 });
@@ -137942,11 +137945,19 @@ ${list}`;
           const text = req.text.trim();
           if (!text) return { ok: false, code: 1, message: "\u6CA1\u6709\u5185\u5BB9\u53EF\u53D1" };
           try {
+            const prev = b.lastSay;
             const sent = await channel.send(b.chatId, { card: sayCard(text, b.label, req.title) });
             settledPolls.set(b.key, 0);
             bindings.touch(b.key, {
               lastSay: { messageId: sent.messageId, body: text, title: req.title, state: "running" }
             });
+            if (prev) {
+              try {
+                await channel.updateCard(prev.messageId, sayCard(prev.body, b.label, prev.title, "superseded"));
+              } catch (err) {
+                log("say.supersede-failed", { key: b.key, err: String(err).slice(0, 160) });
+              }
+            }
             markOutbound(b.key);
             log("say.sent", { key: b.key, chars: text.length });
             return { ok: true, kind: "ack" };
