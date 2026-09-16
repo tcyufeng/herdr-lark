@@ -37,6 +37,13 @@ const INJECT_SUBMIT_WAIT_MS = 8_000;
  * earlier "you forgot to mirror" nudge fire on live conversations.
  */
 const TURN_SETTLE_POLLS = 3;
+/**
+ * How much of a turn's length must already have reached the group for the
+ * Stop hook to consider it mirrored and stay quiet. Below 1 because agents
+ * reword rather than copy; well above 0 so a one-line progress note does not
+ * pass for the answer.
+ */
+const MIRRORED_ENOUGH = 0.6;
 
 /** The log records ids and state transitions only — never message bodies. */
 function log(event: string, detail: Record<string, unknown> = {}): void {
@@ -138,6 +145,12 @@ export async function runDaemon(): Promise<void> {
   const lastStatus = new Map<string, string>();
   /** Consecutive polls in which a session has not been working. */
   const settledPolls = new Map<string, number>();
+  /**
+   * Replies sent to each group lately, so the Stop hook can tell how much of a
+   * turn the agent already mirrored on its own. `lastSay` is not enough: a turn
+   * can produce several cards, and the newest may be the shortest of them.
+   */
+  const recentSays = new Map<string, { at: number; chars: number }[]>();
   /** When a phone message was last delivered into each session's pane. */
   const lastInject = new Map<string, number>();
   /** The inject a missed-mirror card has already been sent for. */
@@ -175,6 +188,9 @@ export async function runDaemon(): Promise<void> {
         }
       }
       markOutbound(b.key);
+      const seen = recentSays.get(b.key) ?? [];
+      seen.push({ at: Date.now(), chars: text.replace(/\s+/g, ' ').trim().length });
+      recentSays.set(b.key, seen.slice(-10));
       log('say.sent', { key: b.key, chars: text.length });
       return { ok: true, kind: 'ack' };
     } catch (err) {
@@ -1001,14 +1017,26 @@ export async function runDaemon(): Promise<void> {
           if (!b.away) return { ok: true, kind: 'ack' };
           const text = req.text.trim();
           if (!text) return { ok: true, kind: 'ack' };
-          // Decide by content, not by the clock. "Something went out during
-          // this turn" is the wrong test: an agent that mirrored a progress
-          // note and then forgot its actual answer would silence the answer.
-          // What matters is whether the turn's *ending* has already been sent.
+          // Decide on how much of this turn already reached the group, not on
+          // the text matching. Two earlier judgements were both wrong:
+          //
+          //   "anything went out this turn"  — an agent that mirrored a short
+          //   progress note and then forgot its answer would silence the answer.
+          //
+          //   "the turn's ending was sent verbatim" — agents do not mirror
+          //   verbatim. Observed: a 1811-char card for a 1736-char turn, and
+          //   the shorter text cannot end with the longer one, so a faithful
+          //   mirror was judged missing and sent a second time.
+          //
+          // Volume survives rewording. A turn whose cards already carry most of
+          // its length was mirrored; one that only produced a short note was not.
           const norm = (v: string): string => v.replace(/\s+/g, ' ').trim();
-          const sameTurn = b.lastSay && b.lastSay.at >= req.turnStartedAt ? b.lastSay.body : null;
-          if (sameTurn && norm(text).endsWith(norm(sameTurn))) {
-            log('mirror.skipped', { key: b.key, why: 'agent already mirrored the ending' });
+          const turnChars = norm(text).length;
+          const mirrored = (recentSays.get(b.key) ?? [])
+            .filter((r) => r.at >= req.turnStartedAt)
+            .reduce((sum, r) => sum + r.chars, 0);
+          if (mirrored >= turnChars * MIRRORED_ENOUGH) {
+            log('mirror.skipped', { key: b.key, mirrored, turnChars });
             return { ok: true, kind: 'ack' };
           }
           log('mirror.hook', { key: b.key, chars: text.length });

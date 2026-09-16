@@ -63,6 +63,10 @@ cp .agents/skills/herdr-lark/examples/remote-mode-rule.md ~/.claude/rules/
 
 While remote mode is on, every reply it writes in the terminal is mirrored **verbatim** into the group, decisions arrive as cards with buttons, and you get a push when the agent is stuck on a prompt only you can answer.
 
+Each mirrored card says **whose turn it is**: ⏳ while the session is still working, rewritten in place to
+✅ once the turn ends, ⚠️ when it is parked on a prompt only you can answer. Only the newest card carries
+a state — the ones above it become signposts — so the bottom of the thread is the only thing worth reading.
+
 Prefer slash commands? Copy them all in — they share a prefix, so typing `/away` lists the set:
 
 ```bash
@@ -73,6 +77,20 @@ cp .agents/skills/herdr-lark/examples/commands/*.md ~/.claude/commands/
 
 Turning it on covers the session you are in; `--all` (and `/away-off-all`) covers every bound session,
 because someone who says "I'm back" is back as a person, not back in one directory.
+
+## When the agent forgets to mirror
+
+Mirroring asks the agent to copy its answer into a command *before* it stops speaking, and stopping is the
+end of the turn — there is nothing after it to hang the copy on. Busy sessions write the answer and stop,
+and the phone gets silence.
+
+Two backstops, neither of which touches the conversation in the terminal:
+
+- **Every agent CLI**: a turn that ends with nothing mirrored pushes a 🔇 card carrying the terminal's own
+  output. Readable, but it is a screenshot of a terminal — tables wrap, long answers are cut.
+- **Claude Code**: a `Stop` hook sends the turn's real text from the transcript, with markdown intact. It
+  declines when the agent already mirrored most of the turn itself. Optional, one entry in your
+  `settings.json` — see [examples/hooks](./examples/hooks/README.md). Nothing in the skill depends on it.
 
 ## No notification on your phone?
 

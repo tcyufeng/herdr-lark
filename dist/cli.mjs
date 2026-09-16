@@ -137390,6 +137390,7 @@ async function runDaemon() {
   const pendings = /* @__PURE__ */ new Map();
   const lastStatus = /* @__PURE__ */ new Map();
   const settledPolls = /* @__PURE__ */ new Map();
+  const recentSays = /* @__PURE__ */ new Map();
   const lastInject = /* @__PURE__ */ new Map();
   const missAlerted = /* @__PURE__ */ new Map();
   const lastStatusPush = /* @__PURE__ */ new Map();
@@ -137414,6 +137415,9 @@ async function runDaemon() {
         }
       }
       markOutbound(b.key);
+      const seen = recentSays.get(b.key) ?? [];
+      seen.push({ at: Date.now(), chars: text.replace(/\s+/g, " ").trim().length });
+      recentSays.set(b.key, seen.slice(-10));
       log("say.sent", { key: b.key, chars: text.length });
       return { ok: true, kind: "ack" };
     } catch (err) {
@@ -138047,9 +138051,10 @@ ${list}`;
           const text = req.text.trim();
           if (!text) return { ok: true, kind: "ack" };
           const norm = (v) => v.replace(/\s+/g, " ").trim();
-          const sameTurn = b.lastSay && b.lastSay.at >= req.turnStartedAt ? b.lastSay.body : null;
-          if (sameTurn && norm(text).endsWith(norm(sameTurn))) {
-            log("mirror.skipped", { key: b.key, why: "agent already mirrored the ending" });
+          const turnChars = norm(text).length;
+          const mirrored = (recentSays.get(b.key) ?? []).filter((r) => r.at >= req.turnStartedAt).reduce((sum, r) => sum + r.chars, 0);
+          if (mirrored >= turnChars * MIRRORED_ENOUGH) {
+            log("mirror.skipped", { key: b.key, mirrored, turnChars });
             return { ok: true, kind: "ack" };
           }
           log("mirror.hook", { key: b.key, chars: text.length });
@@ -138145,7 +138150,7 @@ ${list}`;
     process.on(sig, () => void shutdown(sig));
   }
 }
-var INJECT_PREFIX, POLL_MS, STATUS_COOLDOWN_MS, LINK_ALERT_AFTER_MS, LINK_FORCE_RECONNECT_AFTER_MS, LINK_STUCK_AFTER_MS, INJECT_SUBMIT_WAIT_MS, TURN_SETTLE_POLLS, MAX_IMAGE_BYTES, MAX_FILE_BYTES;
+var INJECT_PREFIX, POLL_MS, STATUS_COOLDOWN_MS, LINK_ALERT_AFTER_MS, LINK_FORCE_RECONNECT_AFTER_MS, LINK_STUCK_AFTER_MS, INJECT_SUBMIT_WAIT_MS, TURN_SETTLE_POLLS, MIRRORED_ENOUGH, MAX_IMAGE_BYTES, MAX_FILE_BYTES;
 var init_daemon = __esm({
   "src/daemon.ts"() {
     "use strict";
@@ -138165,6 +138170,7 @@ var init_daemon = __esm({
     LINK_STUCK_AFTER_MS = 3e5;
     INJECT_SUBMIT_WAIT_MS = 8e3;
     TURN_SETTLE_POLLS = 3;
+    MIRRORED_ENOUGH = 0.6;
     MAX_IMAGE_BYTES = 10 * 1024 * 1024;
     MAX_FILE_BYTES = 30 * 1024 * 1024;
   }
