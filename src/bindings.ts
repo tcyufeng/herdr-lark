@@ -1,11 +1,11 @@
 import { readFileSync, renameSync, writeFileSync } from 'node:fs';
-import { bindingsPath, ensureHomeDir } from './paths.js';
+import { bindingsPath, ensureHomeDir, projectLabel } from './paths.js';
 
 export interface Binding {
   /**
-   * `pane:<id>` — one window, one group. See `caller()` in cli.ts for why the
-   * pane wins over both the directory and the agent session.
-   * `sess:<id>` or `proj:<root>` when there is no pane to key on.
+   * `sess:<id>` — one agent session, one group. See `caller()` in cli.ts for
+   * why the session wins over both the directory and the pane.
+   * `pane:<id>` or `proj:<root>` when there is no session to key on.
    */
   key: string;
   /** Recorded, not keyed on: a change here means the human ran `/clear`. */
@@ -14,6 +14,7 @@ export interface Binding {
   root: string;
   /** What this session is working on, from the terminal title when known. */
   task: string | null;
+  /** Derived from `root`, which is fixed at bind time — so this never drifts. */
   label: string;
   chatId: string;
   /** herdr pane that phone messages are injected into; refreshed on every call. */
@@ -24,6 +25,13 @@ export interface Binding {
   /** Only push "finished" when the turn ran at least this long. */
   idleMinMinutes: number;
   boundAt: string;
+  /**
+   * What the Feishu group is actually called right now. `task` cannot stand in
+   * for this: every CLI call refreshes `task` from the terminal title, so
+   * comparing the title against it always matches and the rename never fires —
+   * the group then keeps whatever name it got at creation, forever.
+   */
+  namedAs?: string | null;
 }
 
 export class BindingStore {
@@ -45,6 +53,12 @@ export class BindingStore {
         if (typeof b.key !== 'string') b.key = `proj:${b.root}`;
         if (b.sessionId === undefined) b.sessionId = null;
         if (b.task === undefined) b.task = null;
+        // The label names the project this group belongs to, and the group is
+        // bound to a fixed root. Earlier versions let every CLI call overwrite
+        // it with the caller's *current* directory, so a session that cd'd up
+        // to an umbrella repo silently renamed its own group out from under
+        // the human. Derive it from the root that never moves.
+        b.label = projectLabel(b.root);
         this.map.set(b.key, b);
       }
     } catch {
@@ -125,7 +139,7 @@ export class BindingStore {
   /** Refresh the fields a live call carries, without disturbing the binding. */
   touch(
     key: string,
-    patch: Partial<Pick<Binding, 'paneId' | 'away' | 'label' | 'task' | 'notifyIdle' | 'idleMinMinutes'>>,
+    patch: Partial<Pick<Binding, 'paneId' | 'away' | 'task' | 'notifyIdle' | 'idleMinMinutes' | 'namedAs'>>,
   ): Binding | undefined {
     const b = this.map.get(key);
     if (!b) return undefined;
@@ -133,8 +147,8 @@ export class BindingStore {
     if (patch.away !== undefined) b.away = patch.away;
     if (patch.notifyIdle !== undefined) b.notifyIdle = patch.notifyIdle;
     if (patch.idleMinMinutes !== undefined) b.idleMinMinutes = patch.idleMinMinutes;
-    if (patch.label) b.label = patch.label;
     if (patch.task !== undefined) b.task = patch.task;
+    if (patch.namedAs !== undefined) b.namedAs = patch.namedAs;
     this.persist();
     return b;
   }

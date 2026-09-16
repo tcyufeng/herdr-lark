@@ -230,12 +230,12 @@ export async function runDaemon(): Promise<void> {
       await (channel.rawClient as unknown as {
         im: { chat: { update(req: unknown): Promise<unknown> } };
       }).im.chat.update({ path: { chat_id: b.chatId }, data: { name } });
-      bindings.touch(b.key, { task });
+      bindings.touch(b.key, { task, namedAs: name });
       log('chat.renamed', { key: b.key, task });
     } catch (err) {
       log('chat.rename-failed', { key: b.key, err: String(err).slice(0, 160) });
       // Record it anyway: retrying every 5 s on a permission error is noise.
-      bindings.touch(b.key, { task });
+      bindings.touch(b.key, { task, namedAs: name });
     }
   };
 
@@ -464,8 +464,12 @@ export async function runDaemon(): Promise<void> {
         (b.sessionId ? agents.find((x) => x.agent_session?.value === b.sessionId) : undefined) ??
         agents.find((x) => x.pane_id === b.paneId);
       if (a && a.pane_id !== b.paneId) bindings.touch(b.key, { paneId: a.pane_id });
+      // Compare against the name the group actually carries, not against
+      // `task` — that field is rewritten by every CLI call, so it agrees with
+      // the title before the rename ever runs. A binding from before this was
+      // recorded has no `namedAs`, so it gets one corrective rename.
       const task = a?.terminal_title_stripped?.trim();
-      if (task && task !== b.task) await renameChat(b, task);
+      if (task && groupName(b.label, task) !== b.namedAs) await renameChat(b, task);
     }
 
     const away = all.filter((b) => b.away && b.paneId);
@@ -705,7 +709,7 @@ export async function runDaemon(): Promise<void> {
             return { ok: true, kind: 'bind', chatId: req.chatId, created: false, name: c.project };
           }
           if (existing) {
-            bindings.touch(c.key, { paneId: c.paneId, label: c.project, task: c.task });
+            bindings.touch(c.key, { paneId: c.paneId, task: c.task });
             return { ok: true, kind: 'bind', chatId: existing.chatId, created: false, name: existing.label };
           }
           // Adopt a binding written before the key was the session: re-key it
@@ -802,6 +806,7 @@ export async function runDaemon(): Promise<void> {
               task: c.task,
               label: c.project,
               chatId,
+              namedAs: name,
               paneId: c.paneId,
               away: false,
               notifyIdle: false,
@@ -848,7 +853,6 @@ export async function runDaemon(): Promise<void> {
           const b = bindings.touch(req.caller.key, {
             away: req.away,
             paneId: req.caller.paneId,
-            label: req.caller.project,
             task: req.caller.task,
             notifyIdle: req.notifyIdle,
             idleMinMinutes: req.idleMinMinutes,
@@ -861,7 +865,7 @@ export async function runDaemon(): Promise<void> {
         }
 
         case 'notify': {
-          const b = bindings.touch(req.caller.key, { paneId: req.caller.paneId, label: req.caller.project, task: req.caller.task });
+          const b = bindings.touch(req.caller.key, { paneId: req.caller.paneId, task: req.caller.task });
           if (!b) return { ok: false, code: 4, message: '这个会话还没绑定，先跑 herdr-lark away on' };
           let payload;
           try {
@@ -881,7 +885,7 @@ export async function runDaemon(): Promise<void> {
         }
 
         case 'say': {
-          const b = bindings.touch(req.caller.key, { paneId: req.caller.paneId, label: req.caller.project, task: req.caller.task });
+          const b = bindings.touch(req.caller.key, { paneId: req.caller.paneId, task: req.caller.task });
           if (!b) return { ok: false, code: 4, message: '这个项目还没 bind，先跑 herdr-lark away on' };
           const text = req.text.trim();
           if (!text) return { ok: false, code: 1, message: '没有内容可发' };
@@ -896,7 +900,7 @@ export async function runDaemon(): Promise<void> {
         }
 
         case 'sendFile': {
-          const b = bindings.touch(req.caller.key, { paneId: req.caller.paneId, label: req.caller.project, task: req.caller.task });
+          const b = bindings.touch(req.caller.key, { paneId: req.caller.paneId, task: req.caller.task });
           if (!b) return { ok: false, code: 4, message: '这个会话还没绑定，先跑 herdr-lark away on' };
           const checked = resolveSendable(req.path, b.root);
           if ('error' in checked) return { ok: false, code: 1, message: checked.error };
@@ -922,7 +926,7 @@ export async function runDaemon(): Promise<void> {
         }
 
         case 'ask': {
-          const b = bindings.touch(req.caller.key, { paneId: req.caller.paneId, label: req.caller.project, task: req.caller.task });
+          const b = bindings.touch(req.caller.key, { paneId: req.caller.paneId, task: req.caller.task });
           if (!b) return { ok: false, code: 4, message: '这个会话还没绑定，先跑 herdr-lark away on' };
           if (pendingFor(req.caller.key))
             return { ok: false, code: 4, message: '这个项目已经有一个问题挂在手机上了；一次只能问一个' };

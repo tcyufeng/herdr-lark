@@ -136962,6 +136962,7 @@ var init_bindings = __esm({
             if (typeof b.key !== "string") b.key = `proj:${b.root}`;
             if (b.sessionId === void 0) b.sessionId = null;
             if (b.task === void 0) b.task = null;
+            b.label = projectLabel(b.root);
             this.map.set(b.key, b);
           }
         } catch {
@@ -137038,8 +137039,8 @@ var init_bindings = __esm({
         if (patch.away !== void 0) b.away = patch.away;
         if (patch.notifyIdle !== void 0) b.notifyIdle = patch.notifyIdle;
         if (patch.idleMinMinutes !== void 0) b.idleMinMinutes = patch.idleMinMinutes;
-        if (patch.label) b.label = patch.label;
         if (patch.task !== void 0) b.task = patch.task;
+        if (patch.namedAs !== void 0) b.namedAs = patch.namedAs;
         this.persist();
         return b;
       }
@@ -137388,11 +137389,11 @@ async function runDaemon() {
     const name = groupName(b.label, task);
     try {
       await channel.rawClient.im.chat.update({ path: { chat_id: b.chatId }, data: { name } });
-      bindings.touch(b.key, { task });
+      bindings.touch(b.key, { task, namedAs: name });
       log("chat.renamed", { key: b.key, task });
     } catch (err) {
       log("chat.rename-failed", { key: b.key, err: String(err).slice(0, 160) });
-      bindings.touch(b.key, { task });
+      bindings.touch(b.key, { task, namedAs: name });
     }
   };
   const receipt = async (b, why) => {
@@ -137558,7 +137559,7 @@ ${list}`;
       const a = (b.sessionId ? agents.find((x) => x.agent_session?.value === b.sessionId) : void 0) ?? agents.find((x) => x.pane_id === b.paneId);
       if (a && a.pane_id !== b.paneId) bindings.touch(b.key, { paneId: a.pane_id });
       const task = a?.terminal_title_stripped?.trim();
-      if (task && task !== b.task) await renameChat(b, task);
+      if (task && groupName(b.label, task) !== b.namedAs) await renameChat(b, task);
     }
     const away = all.filter((b) => b.away && b.paneId);
     if (!away.length) return;
@@ -137759,7 +137760,7 @@ ${list}`;
             return { ok: true, kind: "bind", chatId: req.chatId, created: false, name: c.project };
           }
           if (existing) {
-            bindings.touch(c.key, { paneId: c.paneId, label: c.project, task: c.task });
+            bindings.touch(c.key, { paneId: c.paneId, task: c.task });
             return { ok: true, kind: "bind", chatId: existing.chatId, created: false, name: existing.label };
           }
           const prior = (c.sessionId ? bindings.all().find((x) => x.sessionId === c.sessionId && x.key !== c.key) : void 0) ?? (c.paneId ? bindings.all().find((x) => x.paneId === c.paneId && x.key !== c.key) : void 0) ?? bindings.get(`proj:${c.root}`);
@@ -137833,6 +137834,7 @@ ${list}`;
               task: c.task,
               label: c.project,
               chatId,
+              namedAs: name,
               paneId: c.paneId,
               away: false,
               notifyIdle: false,
@@ -137874,7 +137876,6 @@ ${list}`;
           const b = bindings.touch(req.caller.key, {
             away: req.away,
             paneId: req.caller.paneId,
-            label: req.caller.project,
             task: req.caller.task,
             notifyIdle: req.notifyIdle,
             idleMinMinutes: req.idleMinMinutes
@@ -137886,7 +137887,7 @@ ${list}`;
           return { ok: true, kind: "ack" };
         }
         case "notify": {
-          const b = bindings.touch(req.caller.key, { paneId: req.caller.paneId, label: req.caller.project, task: req.caller.task });
+          const b = bindings.touch(req.caller.key, { paneId: req.caller.paneId, task: req.caller.task });
           if (!b) return { ok: false, code: 4, message: "\u8FD9\u4E2A\u4F1A\u8BDD\u8FD8\u6CA1\u7ED1\u5B9A\uFF0C\u5148\u8DD1 herdr-lark away on" };
           let payload;
           try {
@@ -137905,7 +137906,7 @@ ${list}`;
           }
         }
         case "say": {
-          const b = bindings.touch(req.caller.key, { paneId: req.caller.paneId, label: req.caller.project, task: req.caller.task });
+          const b = bindings.touch(req.caller.key, { paneId: req.caller.paneId, task: req.caller.task });
           if (!b) return { ok: false, code: 4, message: "\u8FD9\u4E2A\u9879\u76EE\u8FD8\u6CA1 bind\uFF0C\u5148\u8DD1 herdr-lark away on" };
           const text = req.text.trim();
           if (!text) return { ok: false, code: 1, message: "\u6CA1\u6709\u5185\u5BB9\u53EF\u53D1" };
@@ -137919,7 +137920,7 @@ ${list}`;
           }
         }
         case "sendFile": {
-          const b = bindings.touch(req.caller.key, { paneId: req.caller.paneId, label: req.caller.project, task: req.caller.task });
+          const b = bindings.touch(req.caller.key, { paneId: req.caller.paneId, task: req.caller.task });
           if (!b) return { ok: false, code: 4, message: "\u8FD9\u4E2A\u4F1A\u8BDD\u8FD8\u6CA1\u7ED1\u5B9A\uFF0C\u5148\u8DD1 herdr-lark away on" };
           const checked = resolveSendable(req.path, b.root);
           if ("error" in checked) return { ok: false, code: 1, message: checked.error };
@@ -137940,7 +137941,7 @@ ${list}`;
           }
         }
         case "ask": {
-          const b = bindings.touch(req.caller.key, { paneId: req.caller.paneId, label: req.caller.project, task: req.caller.task });
+          const b = bindings.touch(req.caller.key, { paneId: req.caller.paneId, task: req.caller.task });
           if (!b) return { ok: false, code: 4, message: "\u8FD9\u4E2A\u4F1A\u8BDD\u8FD8\u6CA1\u7ED1\u5B9A\uFF0C\u5148\u8DD1 herdr-lark away on" };
           if (pendingFor(req.caller.key))
             return { ok: false, code: 4, message: "\u8FD9\u4E2A\u9879\u76EE\u5DF2\u7ECF\u6709\u4E00\u4E2A\u95EE\u9898\u6302\u5728\u624B\u673A\u4E0A\u4E86\uFF1B\u4E00\u6B21\u53EA\u80FD\u95EE\u4E00\u4E2A" };
