@@ -84,6 +84,10 @@ When no question is pending, anything you send in the group is injected into tha
 
 If injection fails (the agent is stuck on a prompt only you can answer, the pane is gone), a receipt card appears in the group.
 
+The Enter is only pressed when nobody can be typing: the pane is unfocused (a multiplexer routes the human's keystrokes to the focused pane and nowhere else, so an unfocused pane cannot be holding a half-written sentence), or away mode is on (the human has said they are not at that keyboard). A focused pane with away off is left alone — someone is probably sitting there, and the receipt card tells them to press Enter.
+
+The `[herdr-lark remote] ` prefix is an **assertion, not a credential**: it says the daemon wrote that text into the pane. Anything else able to write to the pane can type the same prefix, and the agent cannot tell the difference. Pane input is the trust boundary, and herdr-lark does not control what is upstream of it.
+
 After injecting, the daemon confirms the turn **actually started** rather than that the text was merely typed. Claude Code rewrites a pasted image path into an attachment first, and the submit keystroke is swallowed while it does — the message then sits in the input box looking delivered. Sending images is what usually triggers this. The daemon presses Enter itself when that happens, and only sends a receipt card if the turn still does not start.
 
 ### Agent state pushes

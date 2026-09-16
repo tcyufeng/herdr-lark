@@ -286,10 +286,22 @@ export async function runDaemon(): Promise<void> {
     // without the `--wait` above the message would sit there looking
     // delivered. Press Enter ourselves and check the turn really started.
     if (!outcome.ok && outcome.code === 'agent_prompt_stalled') {
-      const keyed = await sendKeys(paneId, 'enter');
-      const started = keyed.ok && (await paneStarted(paneId, INJECT_SUBMIT_WAIT_MS));
-      log('inject.stalled', { key: b.key, paneId, rescued: started });
-      if (started) outcome = { ok: true };
+      // Pressing Enter on someone's behalf is only safe when nobody can be
+      // typing into that pane. A multiplexer routes the human's keystrokes to
+      // the focused pane and nowhere else, so an unfocused pane cannot be
+      // holding a half-written sentence — but a focused one can, and sending
+      // Enter there would submit whatever they were in the middle of. The
+      // exception is away mode: the human has said they are not at this
+      // keyboard, which is the whole premise of the mode.
+      const focused = (await agentList()).find((a) => a.pane_id === paneId)?.focused ?? false;
+      if (focused && !b.away) {
+        log('inject.stalled', { key: b.key, paneId, rescued: false, why: 'pane focused, human may be typing' });
+      } else {
+        const keyed = await sendKeys(paneId, 'enter');
+        const started = keyed.ok && (await paneStarted(paneId, INJECT_SUBMIT_WAIT_MS));
+        log('inject.stalled', { key: b.key, paneId, rescued: started });
+        if (started) outcome = { ok: true };
+      }
     }
     log('inject', { key: b.key, paneId, ok: outcome.ok, code: outcome.code });
     if (!outcome.ok) await receipt(b, explainPromptFailure(outcome.code, outcome.message));

@@ -137429,10 +137429,15 @@ async function runDaemon() {
     }
     let outcome = await promptPane(paneId, `${INJECT_PREFIX}${text}`, { waitMs: INJECT_SUBMIT_WAIT_MS });
     if (!outcome.ok && outcome.code === "agent_prompt_stalled") {
-      const keyed = await sendKeys(paneId, "enter");
-      const started = keyed.ok && await paneStarted(paneId, INJECT_SUBMIT_WAIT_MS);
-      log("inject.stalled", { key: b.key, paneId, rescued: started });
-      if (started) outcome = { ok: true };
+      const focused = (await agentList()).find((a) => a.pane_id === paneId)?.focused ?? false;
+      if (focused && !b.away) {
+        log("inject.stalled", { key: b.key, paneId, rescued: false, why: "pane focused, human may be typing" });
+      } else {
+        const keyed = await sendKeys(paneId, "enter");
+        const started = keyed.ok && await paneStarted(paneId, INJECT_SUBMIT_WAIT_MS);
+        log("inject.stalled", { key: b.key, paneId, rescued: started });
+        if (started) outcome = { ok: true };
+      }
     }
     log("inject", { key: b.key, paneId, ok: outcome.ok, code: outcome.code });
     if (!outcome.ok) await receipt(b, explainPromptFailure(outcome.code, outcome.message));
