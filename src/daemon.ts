@@ -7,7 +7,7 @@ import { createLarkChannel, type CardActionEvent, type LarkChannel, type Normali
 import { BindingStore, type Binding } from './bindings.js';
 import { askCard, linkCard, notifyCard, receiptCard, sayCard, statusCard } from './cards.js';
 import { resolveCreds } from './creds.js';
-import { agentList, findPaneForProject, findPaneForSession, promptPane } from './herdr.js';
+import { agentList, findPaneForProject, findPaneForSession, paneStarted, promptPane, sendKeys } from './herdr.js';
 import { serve, type Caller, type Request, type Response } from './ipc.js';
 import { ensureHomeDir, homeDir, logPath, pidPath, sockPath } from './paths.js';
 import { validateAsk, validateNotify, ValidationError, type AskPayload } from './validate.js';
@@ -28,6 +28,8 @@ const LINK_ALERT_AFTER_MS = 90_000;
 const LINK_FORCE_RECONNECT_AFTER_MS = 60_000;
 /** A reconnect loop that has been grinding this long is stuck, not working. */
 const LINK_STUCK_AFTER_MS = 300_000;
+/** How long to wait for the pane's agent to actually start on an injected message. */
+const INJECT_SUBMIT_WAIT_MS = 8_000;
 
 /** The log records ids and state transitions only — never message bodies. */
 function log(event: string, detail: Record<string, unknown> = {}): void {
@@ -252,6 +254,8 @@ export async function runDaemon(): Promise<void> {
       case 'agent_not_found':
       case 'pane_not_found':
         return '记录的 herdr 窗格已经不在了。到项目里跑一次 herdr-lark bind 或任意 herdr-lark 命令，重新记录窗格。';
+      case 'agent_prompt_stalled':
+        return '消息送到了终端的输入框，但那边没把它发出去——回电脑上按一下回车就行。';
       case 'spawn_failed':
         return `herdr 命令没跑起来：${message ?? '未知原因'}`;
       default:
@@ -274,7 +278,19 @@ export async function runDaemon(): Promise<void> {
       await receipt(b, '这个项目还没有记录到 herdr 窗格，消息没处可送。');
       return;
     }
-    const outcome = await promptPane(paneId, `${INJECT_PREFIX}${text}`);
+    let outcome = await promptPane(paneId, `${INJECT_PREFIX}${text}`, { waitMs: INJECT_SUBMIT_WAIT_MS });
+    // The text can land in the input box without ever being sent: Claude Code
+    // rewrites a pasted image path into an attachment before it will accept a
+    // submit, and the Enter herdr sends in the same burst is swallowed while
+    // it does that. herdr still reports success — it typed the thing — so
+    // without the `--wait` above the message would sit there looking
+    // delivered. Press Enter ourselves and check the turn really started.
+    if (!outcome.ok && outcome.code === 'agent_prompt_stalled') {
+      const keyed = await sendKeys(paneId, 'enter');
+      const started = keyed.ok && (await paneStarted(paneId, INJECT_SUBMIT_WAIT_MS));
+      log('inject.stalled', { key: b.key, paneId, rescued: started });
+      if (started) outcome = { ok: true };
+    }
     log('inject', { key: b.key, paneId, ok: outcome.ok, code: outcome.code });
     if (!outcome.ok) await receipt(b, explainPromptFailure(outcome.code, outcome.message));
   };

@@ -136527,10 +136527,12 @@ function agentListSync() {
     return [];
   }
 }
-async function promptPane(paneId, text) {
+async function promptPane(paneId, text, opts = {}) {
+  const args = ["agent", "prompt", paneId, text];
+  if (opts.waitMs) args.push("--wait", "--until", "working", "--until", "blocked", "--timeout", String(opts.waitMs));
   try {
-    const { stdout } = await execFileAsync("herdr", ["agent", "prompt", paneId, text], {
-      timeout: 2e4,
+    const { stdout } = await execFileAsync("herdr", args, {
+      timeout: (opts.waitMs ?? 0) + 2e4,
       maxBuffer: 1024 * 1024
     });
     const env = parse(stdout);
@@ -136538,6 +136540,28 @@ async function promptPane(paneId, text) {
     return { ok: true };
   } catch (err) {
     return { ok: false, code: "spawn_failed", message: err instanceof Error ? err.message : String(err) };
+  }
+}
+async function sendKeys(paneId, ...keys) {
+  try {
+    const { stdout } = await execFileAsync("herdr", ["agent", "send-keys", paneId, ...keys], { timeout: 1e4 });
+    const env = parse(stdout);
+    if (env.error) return { ok: false, code: env.error.code, message: env.error.message };
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, code: "spawn_failed", message: err instanceof Error ? err.message : String(err) };
+  }
+}
+async function paneStarted(paneId, timeoutMs) {
+  try {
+    const { stdout } = await execFileAsync(
+      "herdr",
+      ["agent", "wait", paneId, "--until", "working", "--until", "blocked", "--timeout", String(timeoutMs)],
+      { timeout: timeoutMs + 1e4 }
+    );
+    return !parse(stdout).error;
+  } catch {
+    return false;
   }
 }
 function findPaneForProject(agents, root) {
@@ -137368,6 +137392,8 @@ async function runDaemon() {
       case "agent_not_found":
       case "pane_not_found":
         return "\u8BB0\u5F55\u7684 herdr \u7A97\u683C\u5DF2\u7ECF\u4E0D\u5728\u4E86\u3002\u5230\u9879\u76EE\u91CC\u8DD1\u4E00\u6B21 herdr-lark bind \u6216\u4EFB\u610F herdr-lark \u547D\u4EE4\uFF0C\u91CD\u65B0\u8BB0\u5F55\u7A97\u683C\u3002";
+      case "agent_prompt_stalled":
+        return "\u6D88\u606F\u9001\u5230\u4E86\u7EC8\u7AEF\u7684\u8F93\u5165\u6846\uFF0C\u4F46\u90A3\u8FB9\u6CA1\u628A\u5B83\u53D1\u51FA\u53BB\u2014\u2014\u56DE\u7535\u8111\u4E0A\u6309\u4E00\u4E0B\u56DE\u8F66\u5C31\u884C\u3002";
       case "spawn_failed":
         return `herdr \u547D\u4EE4\u6CA1\u8DD1\u8D77\u6765\uFF1A${message ?? "\u672A\u77E5\u539F\u56E0"}`;
       default:
@@ -137384,7 +137410,13 @@ async function runDaemon() {
       await receipt(b, "\u8FD9\u4E2A\u9879\u76EE\u8FD8\u6CA1\u6709\u8BB0\u5F55\u5230 herdr \u7A97\u683C\uFF0C\u6D88\u606F\u6CA1\u5904\u53EF\u9001\u3002");
       return;
     }
-    const outcome = await promptPane(paneId, `${INJECT_PREFIX}${text}`);
+    let outcome = await promptPane(paneId, `${INJECT_PREFIX}${text}`, { waitMs: INJECT_SUBMIT_WAIT_MS });
+    if (!outcome.ok && outcome.code === "agent_prompt_stalled") {
+      const keyed = await sendKeys(paneId, "enter");
+      const started = keyed.ok && await paneStarted(paneId, INJECT_SUBMIT_WAIT_MS);
+      log("inject.stalled", { key: b.key, paneId, rescued: started });
+      if (started) outcome = { ok: true };
+    }
     log("inject", { key: b.key, paneId, ok: outcome.ok, code: outcome.code });
     if (!outcome.ok) await receipt(b, explainPromptFailure(outcome.code, outcome.message));
   };
@@ -137954,7 +137986,7 @@ ${list}`;
     process.on(sig, () => void shutdown(sig));
   }
 }
-var INJECT_PREFIX, POLL_MS, STATUS_COOLDOWN_MS, LINK_ALERT_AFTER_MS, LINK_FORCE_RECONNECT_AFTER_MS, LINK_STUCK_AFTER_MS, MAX_IMAGE_BYTES, MAX_FILE_BYTES;
+var INJECT_PREFIX, POLL_MS, STATUS_COOLDOWN_MS, LINK_ALERT_AFTER_MS, LINK_FORCE_RECONNECT_AFTER_MS, LINK_STUCK_AFTER_MS, INJECT_SUBMIT_WAIT_MS, MAX_IMAGE_BYTES, MAX_FILE_BYTES;
 var init_daemon = __esm({
   "src/daemon.ts"() {
     "use strict";
@@ -137972,6 +138004,7 @@ var init_daemon = __esm({
     LINK_ALERT_AFTER_MS = 9e4;
     LINK_FORCE_RECONNECT_AFTER_MS = 6e4;
     LINK_STUCK_AFTER_MS = 3e5;
+    INJECT_SUBMIT_WAIT_MS = 8e3;
     MAX_IMAGE_BYTES = 10 * 1024 * 1024;
     MAX_FILE_BYTES = 30 * 1024 * 1024;
   }

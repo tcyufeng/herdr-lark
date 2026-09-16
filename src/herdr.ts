@@ -77,10 +77,19 @@ export interface PromptOutcome {
  * when the agent is already blocked (`agent_blocked`) — that is a real
  * outcome the caller must report to the phone, not a transport failure.
  */
-export async function promptPane(paneId: string, text: string): Promise<PromptOutcome> {
+export async function promptPane(
+  paneId: string,
+  text: string,
+  opts: { waitMs?: number } = {},
+): Promise<PromptOutcome> {
+  const args = ['agent', 'prompt', paneId, text];
+  // `--wait` is what turns "herdr typed it" into "the agent actually took it".
+  // Without it a submission that lands in the input box but never gets sent
+  // still reports ok, and the message sits there until a human walks over.
+  if (opts.waitMs) args.push('--wait', '--until', 'working', '--until', 'blocked', '--timeout', String(opts.waitMs));
   try {
-    const { stdout } = await execFileAsync('herdr', ['agent', 'prompt', paneId, text], {
-      timeout: 20_000,
+    const { stdout } = await execFileAsync('herdr', args, {
+      timeout: (opts.waitMs ?? 0) + 20_000,
       maxBuffer: 1024 * 1024,
     });
     const env = parse<unknown>(stdout);
@@ -88,6 +97,32 @@ export async function promptPane(paneId: string, text: string): Promise<PromptOu
     return { ok: true };
   } catch (err) {
     return { ok: false, code: 'spawn_failed', message: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/** Raw key presses into a pane. Used to finish a submission herdr's own prompt left hanging. */
+export async function sendKeys(paneId: string, ...keys: string[]): Promise<PromptOutcome> {
+  try {
+    const { stdout } = await execFileAsync('herdr', ['agent', 'send-keys', paneId, ...keys], { timeout: 10_000 });
+    const env = parse<unknown>(stdout);
+    if (env.error) return { ok: false, code: env.error.code, message: env.error.message };
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, code: 'spawn_failed', message: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/** Did the pane start a turn? Returns false on timeout rather than throwing. */
+export async function paneStarted(paneId: string, timeoutMs: number): Promise<boolean> {
+  try {
+    const { stdout } = await execFileAsync(
+      'herdr',
+      ['agent', 'wait', paneId, '--until', 'working', '--until', 'blocked', '--timeout', String(timeoutMs)],
+      { timeout: timeoutMs + 10_000 },
+    );
+    return !parse<unknown>(stdout).error;
+  } catch {
+    return false;
   }
 }
 
