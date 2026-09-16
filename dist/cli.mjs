@@ -137404,7 +137404,7 @@ async function runDaemon() {
       const sent = await channel.send(b.chatId, { card: sayCard(text, b.label, title) });
       settledPolls.set(b.key, 0);
       bindings.touch(b.key, {
-        lastSay: { messageId: sent.messageId, body: text, title, state: "running" }
+        lastSay: { messageId: sent.messageId, body: text, title, state: "running", at: Date.now() }
       });
       if (prev) {
         try {
@@ -138044,12 +138044,14 @@ ${list}`;
           const b = bindings.touch(req.caller.key, { paneId: req.caller.paneId });
           if (!b) return { ok: true, kind: "ack" };
           if (!b.away) return { ok: true, kind: "ack" };
-          if ((lastOutbound.get(b.key) ?? 0) >= req.turnStartedAt) {
-            log("mirror.skipped", { key: b.key, why: "already mirrored this turn" });
-            return { ok: true, kind: "ack" };
-          }
           const text = req.text.trim();
           if (!text) return { ok: true, kind: "ack" };
+          const norm = (v) => v.replace(/\s+/g, " ").trim();
+          const sameTurn = b.lastSay && b.lastSay.at >= req.turnStartedAt ? b.lastSay.body : null;
+          if (sameTurn && norm(text).endsWith(norm(sameTurn))) {
+            log("mirror.skipped", { key: b.key, why: "agent already mirrored the ending" });
+            return { ok: true, kind: "ack" };
+          }
           log("mirror.hook", { key: b.key, chars: text.length });
           return sendSay(b, text);
         }

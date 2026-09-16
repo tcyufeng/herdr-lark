@@ -161,7 +161,7 @@ export async function runDaemon(): Promise<void> {
       const sent = await channel.send(b.chatId, { card: sayCard(text, b.label, title) });
       settledPolls.set(b.key, 0);
       bindings.touch(b.key, {
-        lastSay: { messageId: sent.messageId, body: text, title, state: 'running' },
+        lastSay: { messageId: sent.messageId, body: text, title, state: 'running', at: Date.now() },
       });
       // Only the newest card may claim a state. A background task can wake the
       // session a minute after its turn ended, so a card that legitimately
@@ -999,12 +999,18 @@ export async function runDaemon(): Promise<void> {
           const b = bindings.touch(req.caller.key, { paneId: req.caller.paneId });
           if (!b) return { ok: true, kind: 'ack' };
           if (!b.away) return { ok: true, kind: 'ack' };
-          if ((lastOutbound.get(b.key) ?? 0) >= req.turnStartedAt) {
-            log('mirror.skipped', { key: b.key, why: 'already mirrored this turn' });
-            return { ok: true, kind: 'ack' };
-          }
           const text = req.text.trim();
           if (!text) return { ok: true, kind: 'ack' };
+          // Decide by content, not by the clock. "Something went out during
+          // this turn" is the wrong test: an agent that mirrored a progress
+          // note and then forgot its actual answer would silence the answer.
+          // What matters is whether the turn's *ending* has already been sent.
+          const norm = (v: string): string => v.replace(/\s+/g, ' ').trim();
+          const sameTurn = b.lastSay && b.lastSay.at >= req.turnStartedAt ? b.lastSay.body : null;
+          if (sameTurn && norm(text).endsWith(norm(sameTurn))) {
+            log('mirror.skipped', { key: b.key, why: 'agent already mirrored the ending' });
+            return { ok: true, kind: 'ack' };
+          }
           log('mirror.hook', { key: b.key, chars: text.length });
           return sendSay(b, text);
         }

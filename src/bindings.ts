@@ -37,7 +37,14 @@ export interface Binding {
    * footer when the turn ends. Persisted: a daemon restart mid-turn must not
    * leave a card saying "还在跑" forever.
    */
-  lastSay?: { messageId: string; body: string; title?: string; state: 'running' | 'done' | 'blocked' } | null;
+  lastSay?: {
+    messageId: string;
+    body: string;
+    title?: string;
+    state: 'running' | 'done' | 'blocked' | 'superseded';
+    /** When it went out, so a mirror can tell this turn's card from an older one. */
+    at: number;
+  } | null;
 }
 
 export class BindingStore {
