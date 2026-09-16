@@ -136683,7 +136683,21 @@ __export(ipc_exports, {
   serve: () => serve
 });
 import { createConnection, createServer } from "node:net";
-import { existsSync as existsSync3, unlinkSync as unlinkSync2 } from "node:fs";
+import { existsSync as existsSync3, readFileSync as readFileSync3, unlinkSync as unlinkSync2 } from "node:fs";
+function describeStalePid() {
+  try {
+    const pid = Number(readFileSync3(pidPath(), "utf8").trim());
+    if (!pid) return "";
+    try {
+      process.kill(pid, 0);
+      return `\uFF08pid ${pid} \u8FD8\u6D3B\u7740\uFF0C\u4F46\u6CA1\u5728\u76D1\u542C\u2014\u2014\u5B83\u5361\u4F4F\u4E86\uFF09`;
+    } catch {
+      return `\uFF08pid ${pid} \u5DF2\u7ECF\u4E0D\u5728\u4E86\uFF09`;
+    }
+  } catch {
+    return "";
+  }
+}
 function isDaemonListening() {
   return existsSync3(sockPath());
 }
@@ -136726,7 +136740,10 @@ function request(req, opts = {}) {
       }
     });
     sock.on("error", (err) => {
-      const hint = err.code === "ENOENT" || err.code === "ECONNREFUSED" ? "daemon \u6CA1\u5728\u8DD1\u3002\u5148\u6267\u884C\uFF1Aherdr-lark daemon --detach" : `\u65E0\u6CD5\u8FDE\u63A5 daemon: ${err.message}`;
+      let hint;
+      if (err.code === "ENOENT") hint = "daemon \u6CA1\u5728\u8DD1\uFF08socket \u6587\u4EF6\u4E0D\u5B58\u5728\uFF09\u3002\u5148\u6267\u884C\uFF1Aherdr-lark daemon --detach";
+      else if (err.code === "ECONNREFUSED") hint = `daemon \u5D29\u4E86\uFF1Asocket \u6587\u4EF6\u8FD8\u5728\u4F46\u6CA1\u4EBA\u63A5${describeStalePid()}\u3002\u6267\u884C\uFF1Aherdr-lark daemon --detach`;
+      else hint = `\u65E0\u6CD5\u8FDE\u63A5 daemon: ${err.message}`;
       done({ ok: false, code: 3, message: hint });
     });
     sock.on("close", () => {
@@ -136924,7 +136941,7 @@ var init_validate = __esm({
 });
 
 // src/bindings.ts
-import { readFileSync as readFileSync3, renameSync as renameSync3, writeFileSync as writeFileSync3 } from "node:fs";
+import { readFileSync as readFileSync4, renameSync as renameSync3, writeFileSync as writeFileSync3 } from "node:fs";
 var BindingStore;
 var init_bindings = __esm({
   "src/bindings.ts"() {
@@ -136937,7 +136954,7 @@ var init_bindings = __esm({
       }
       load() {
         try {
-          const raw = JSON.parse(readFileSync3(bindingsPath(), "utf8"));
+          const raw = JSON.parse(readFileSync4(bindingsPath(), "utf8"));
           for (const b of raw.bindings ?? []) {
             if (!b || typeof b.root !== "string" || typeof b.chatId !== "string") continue;
             b.notifyIdle = b.notifyIdle === true;
@@ -137238,7 +137255,7 @@ var daemon_exports = {};
 __export(daemon_exports, {
   runDaemon: () => runDaemon
 });
-import { appendFileSync, mkdirSync as mkdirSync3, readFileSync as readFileSync4, realpathSync, statSync as statSync2, writeFileSync as writeFileSync4, unlinkSync as unlinkSync3, existsSync as existsSync4 } from "node:fs";
+import { appendFileSync, mkdirSync as mkdirSync3, readFileSync as readFileSync5, realpathSync, statSync as statSync2, writeFileSync as writeFileSync4, unlinkSync as unlinkSync3, existsSync as existsSync4 } from "node:fs";
 import { createHash as createHash2, randomUUID as randomUUID2 } from "node:crypto";
 import { basename as basename2, join as join3, sep } from "node:path";
 import { tmpdir } from "node:os";
@@ -137284,7 +137301,7 @@ function resolveSendable(path2, root) {
   const cap = isImage ? MAX_IMAGE_BYTES : MAX_FILE_BYTES;
   if (st.size > cap)
     return { error: `\u6587\u4EF6\u592A\u5927\uFF1A${(st.size / 1024 / 1024).toFixed(1)} MB\uFF0C\u4E0A\u9650 ${cap / 1024 / 1024} MB` };
-  return { real, bytes: readFileSync4(real) };
+  return { real, bytes: readFileSync5(real) };
 }
 async function runDaemon() {
   const creds = resolveCreds();
@@ -137422,7 +137439,7 @@ async function runDaemon() {
   };
   const transcribe = async (audioPath) => {
     try {
-      const b64 = readFileSync4(audioPath).toString("base64");
+      const b64 = readFileSync5(audioPath).toString("base64");
       const res = await channel.rawClient.speech_to_text.speech.fileRecognize({
         data: {
           speech: { speech: b64 },
@@ -138020,7 +138037,7 @@ init_ipc();
 init_paths();
 init_validate();
 import { spawn } from "node:child_process";
-import { existsSync as existsSync5, openSync, readFileSync as readFileSync5, realpathSync as realpathSync2, unlinkSync as unlinkSync4 } from "node:fs";
+import { existsSync as existsSync5, openSync, readFileSync as readFileSync6, realpathSync as realpathSync2, unlinkSync as unlinkSync4 } from "node:fs";
 import { fileURLToPath } from "node:url";
 for (const stream of [process.stdout, process.stderr]) {
   stream.on("error", (err) => {
@@ -138285,7 +138302,7 @@ async function cmdDaemon(args) {
     if (!res.ok) die(3, res.message);
     let pid = 0;
     try {
-      pid = Number(readFileSync5(pidPath(), "utf8").trim()) || 0;
+      pid = Number(readFileSync6(pidPath(), "utf8").trim()) || 0;
     } catch {
     }
     const alive = () => {

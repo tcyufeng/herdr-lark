@@ -1,6 +1,6 @@
 import { createConnection, createServer, type Server, type Socket } from 'node:net';
-import { existsSync, unlinkSync } from 'node:fs';
-import { ensureHomeDir, sockPath } from './paths.js';
+import { existsSync, readFileSync, unlinkSync } from 'node:fs';
+import { ensureHomeDir, pidPath, sockPath } from './paths.js';
 
 /** Every request a thin client can make of the daemon. */
 /** Who is calling: the agent session, not just its directory. */
@@ -50,6 +50,22 @@ export type Response =
  * made the client strip the response's own discriminator.
  */
 export type Frame = { frame: 'note'; text: string } | { frame: 'result'; body: Response };
+
+/** What the pid file says about a daemon that left its socket behind. */
+function describeStalePid(): string {
+  try {
+    const pid = Number(readFileSync(pidPath(), 'utf8').trim());
+    if (!pid) return '';
+    try {
+      process.kill(pid, 0);
+      return `（pid ${pid} 还活着，但没在监听——它卡住了）`;
+    } catch {
+      return `（pid ${pid} 已经不在了）`;
+    }
+  } catch {
+    return '';
+  }
+}
 
 export function isDaemonListening(): boolean {
   return existsSync(sockPath());
@@ -104,10 +120,15 @@ export function request(
       }
     });
     sock.on('error', (err: NodeJS.ErrnoException) => {
-      const hint =
-        err.code === 'ENOENT' || err.code === 'ECONNREFUSED'
-          ? 'daemon 没在跑。先执行：herdr-lark daemon --detach'
-          : `无法连接 daemon: ${err.message}`;
+      // ENOENT and ECONNREFUSED are not the same diagnosis and must not read
+      // the same. No socket file means the daemon was stopped cleanly or never
+      // started. A socket file nobody answers on means it *died* — crashed or
+      // was killed — without running its own cleanup, and that is worth saying
+      // out loud, because the next `--detach` erases the evidence.
+      let hint: string;
+      if (err.code === 'ENOENT') hint = 'daemon 没在跑（socket 文件不存在）。先执行：herdr-lark daemon --detach';
+      else if (err.code === 'ECONNREFUSED') hint = `daemon 崩了：socket 文件还在但没人接${describeStalePid()}。执行：herdr-lark daemon --detach`;
+      else hint = `无法连接 daemon: ${err.message}`;
       done({ ok: false, code: 3, message: hint });
     });
     sock.on('close', () => {
