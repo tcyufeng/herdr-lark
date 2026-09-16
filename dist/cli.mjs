@@ -138236,7 +138236,7 @@ init_paths();
 init_validate();
 for (const stream of [process.stdout, process.stderr]) {
   stream.on("error", (err) => {
-    if (err.code === "EPIPE") process.exit(0);
+    if (err.code === "EPIPE") return;
     throw err;
   });
 }

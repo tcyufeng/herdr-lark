@@ -14,9 +14,15 @@ import { validateAsk, validateNotify, ValidationError } from './validate.js';
 
 // Piping into `head` / `less` closes our stdout early; an unhandled EPIPE
 // would crash with a stack trace instead of just ending quietly.
+//
+// Ignore it and keep working — do NOT exit here. `away on` binds a group and
+// only then flips the switch, printing a line in between: exiting on the first
+// unwritable byte left the channel half-on (bound, switch off) and still
+// reported success, which is exactly the half-open state that command was
+// written to prevent. Nobody reading our output is not a reason to stop.
 for (const stream of [process.stdout, process.stderr]) {
   stream.on('error', (err: NodeJS.ErrnoException) => {
-    if (err.code === 'EPIPE') process.exit(0);
+    if (err.code === 'EPIPE') return;
     throw err;
   });
 }
