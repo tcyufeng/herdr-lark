@@ -8,6 +8,7 @@ import { BindingStore, type Binding } from './bindings.js';
 import { askCard, linkCard, missedMirrorCard, notifyCard, receiptCard, sayCard, statusCard, type TurnState } from './cards.js';
 import { resolveCreds } from './creds.js';
 import { agentList, findPaneForProject, findPaneForSession, paneStarted, paneTail, promptPane, sendKeys } from './herdr.js';
+import { findTranscript, lastTurn } from './transcript.js';
 import { serve, type Caller, type Request, type Response } from './ipc.js';
 import { ensureHomeDir, homeDir, logPath, pidPath, sockPath } from './paths.js';
 import { validateAsk, validateNotify, ValidationError, type AskPayload } from './validate.js';
@@ -314,7 +315,13 @@ export async function runDaemon(): Promise<void> {
     const injected = lastInject.get(b.key);
     if (!injected) return;
     if (missAlerted.get(b.key) === injected) return;
-    const tail = await paneTail(paneId);
+    // Prefer the agent's own words. The transcript has the real markdown, and
+    // reading it needs no hook installed — which matters, because the hook only
+    // reaches sessions that started after it was configured.
+    const path = findTranscript(b.sessionId);
+    const turn = path ? lastTurn(path) : null;
+    const source: 'transcript' | 'terminal' = turn ? 'transcript' : 'terminal';
+    const tail = turn ? turn.text : await paneTail(paneId);
     // "Something went out" is not the test. An agent that mirrored a one-line
     // correction and then wrote a page of tables satisfies it while the human
     // sees almost nothing — observed: 78 characters sent for a turn that filled
@@ -327,9 +334,9 @@ export async function runDaemon(): Promise<void> {
     missAlerted.set(b.key, injected);
     log('mirror.missed-check', { key: b.key, mirrored, tailChars });
     try {
-      await channel.send(b.chatId, { card: missedMirrorCard(b.label, b.task, tail) });
+      await channel.send(b.chatId, { card: missedMirrorCard(b.label, b.task, tail, source) });
       markOutbound(b.key);
-      log('mirror.missed', { key: b.key, hadTail: !!tail });
+      log('mirror.missed', { key: b.key, source, chars: tail?.length ?? 0 });
     } catch (err) {
       log('mirror.missed-failed', { key: b.key, err: String(err).slice(0, 160) });
     }

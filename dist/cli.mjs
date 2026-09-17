@@ -136628,14 +136628,92 @@ var init_herdr = __esm({
   }
 });
 
+// src/transcript.ts
+import { closeSync, existsSync as existsSync2, fstatSync, openSync, readSync, readdirSync } from "node:fs";
+import { homedir as homedir2 } from "node:os";
+import { join as join2 } from "node:path";
+function readTail(path2) {
+  let fd = null;
+  try {
+    fd = openSync(path2, "r");
+    const size = fstatSync(fd).size;
+    const len = Math.min(size, TAIL_BYTES);
+    const buf = Buffer.allocUnsafe(len);
+    readSync(fd, buf, 0, len, size - len);
+    const text = buf.toString("utf8");
+    return len < size ? text.slice(text.indexOf("\n") + 1) : text;
+  } catch {
+    return null;
+  } finally {
+    if (fd !== null) closeSync(fd);
+  }
+}
+function lastTurn(transcriptPath) {
+  const raw = readTail(transcriptPath);
+  if (raw === null) return null;
+  const lines = [];
+  for (const ln of raw.split("\n")) {
+    if (!ln.trim()) continue;
+    try {
+      lines.push(JSON.parse(ln));
+    } catch {
+    }
+  }
+  let start = -1;
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    if (isTurnStart(lines[i])) {
+      start = i;
+      break;
+    }
+  }
+  if (start < 0) return null;
+  const said = [];
+  for (const line of lines.slice(start + 1)) {
+    if (line.type !== "assistant" || line.isSidechain) continue;
+    for (const b of blocks(line)) if (b.type === "text" && b.text?.trim()) said.push(b.text.trim());
+  }
+  if (!said.length) return null;
+  const startedAt = Date.parse(lines[start].timestamp ?? "") || Date.now();
+  return { text: said.join("\n\n"), startedAt };
+}
+function findTranscript(sessionId) {
+  if (!sessionId) return null;
+  const root = join2(process.env.CLAUDE_CONFIG_DIR?.trim() || join2(homedir2(), ".claude"), "projects");
+  if (!existsSync2(root)) return null;
+  try {
+    for (const dir of readdirSync(root)) {
+      const candidate = join2(root, dir, `${sessionId}.jsonl`);
+      if (existsSync2(candidate)) return candidate;
+    }
+  } catch {
+  }
+  return null;
+}
+var blocks, isTurnStart, TAIL_BYTES;
+var init_transcript = __esm({
+  "src/transcript.ts"() {
+    "use strict";
+    blocks = (line) => {
+      const c = line.message?.content;
+      return Array.isArray(c) ? c : [];
+    };
+    isTurnStart = (line) => {
+      if (line.type !== "user" || line.isSidechain) return false;
+      if (typeof line.message?.content === "string") return true;
+      return blocks(line).some((b) => b.type !== "tool_result");
+    };
+    TAIL_BYTES = 16 * 1024 * 1024;
+  }
+});
+
 // src/paths.ts
 import { execFileSync as execFileSync3 } from "node:child_process";
-import { existsSync as existsSync2, mkdirSync as mkdirSync2, readFileSync as readFileSync3, renameSync as renameSync2, writeFileSync as writeFileSync2 } from "node:fs";
-import { homedir as homedir2 } from "node:os";
-import { basename, join as join2, resolve } from "node:path";
+import { existsSync as existsSync3, mkdirSync as mkdirSync2, readFileSync as readFileSync2, renameSync as renameSync2, writeFileSync as writeFileSync2 } from "node:fs";
+import { homedir as homedir3 } from "node:os";
+import { basename, join as join3, resolve } from "node:path";
 function homeDir() {
   const override = process.env.HERDR_LARK_HOME?.trim();
-  return override ? resolve(override) : join2(homedir2(), ".herdr-lark");
+  return override ? resolve(override) : join3(homedir3(), ".herdr-lark");
 }
 function ensureHomeDir() {
   const dir = homeDir();
@@ -136659,7 +136737,7 @@ function projectLabel(root) {
 }
 function readProjectState(root) {
   try {
-    const raw = readFileSync3(projectStatePath(root), "utf8");
+    const raw = readFileSync2(projectStatePath(root), "utf8");
     const parsed = JSON.parse(raw);
     return {
       away: parsed.away === true,
@@ -136674,11 +136752,11 @@ function readProjectState(root) {
 }
 function writeProjectState(root, patch, opts = {}) {
   const dir = projectStateDir(root);
-  const exists = existsSync2(dir);
+  const exists = existsSync3(dir);
   if (!exists && !opts.create) return null;
   if (!exists) {
     mkdirSync2(dir, { recursive: true, mode: 448 });
-    writeFileSync2(join2(dir, ".gitignore"), "*\n", { mode: 384 });
+    writeFileSync2(join3(dir, ".gitignore"), "*\n", { mode: 384 });
   }
   const current = readProjectState(root) ?? {
     away: false,
@@ -136703,12 +136781,12 @@ var sockPath, pidPath, logPath, bindingsPath, projectStateDir, projectStatePath;
 var init_paths = __esm({
   "src/paths.ts"() {
     "use strict";
-    sockPath = () => join2(homeDir(), "daemon.sock");
-    pidPath = () => join2(homeDir(), "daemon.pid");
-    logPath = () => join2(homeDir(), "daemon.log");
-    bindingsPath = () => join2(homeDir(), "bindings.json");
-    projectStateDir = (root) => join2(root, ".herdr-lark");
-    projectStatePath = (root) => join2(projectStateDir(root), "state.json");
+    sockPath = () => join3(homeDir(), "daemon.sock");
+    pidPath = () => join3(homeDir(), "daemon.pid");
+    logPath = () => join3(homeDir(), "daemon.log");
+    bindingsPath = () => join3(homeDir(), "bindings.json");
+    projectStateDir = (root) => join3(root, ".herdr-lark");
+    projectStatePath = (root) => join3(projectStateDir(root), "state.json");
   }
 });
 
@@ -136720,10 +136798,10 @@ __export(ipc_exports, {
   serve: () => serve
 });
 import { createConnection, createServer } from "node:net";
-import { existsSync as existsSync3, readFileSync as readFileSync4, unlinkSync as unlinkSync2 } from "node:fs";
+import { existsSync as existsSync4, readFileSync as readFileSync3, unlinkSync as unlinkSync2 } from "node:fs";
 function describeStalePid() {
   try {
-    const pid = Number(readFileSync4(pidPath(), "utf8").trim());
+    const pid = Number(readFileSync3(pidPath(), "utf8").trim());
     if (!pid) return "";
     try {
       process.kill(pid, 0);
@@ -136736,7 +136814,7 @@ function describeStalePid() {
   }
 }
 function isDaemonListening() {
-  return existsSync3(sockPath());
+  return existsSync4(sockPath());
 }
 function request(req, opts = {}) {
   return new Promise((resolve2) => {
@@ -136796,7 +136874,7 @@ function request(req, opts = {}) {
 function serve(handlers) {
   ensureHomeDir();
   const path2 = sockPath();
-  if (existsSync3(path2)) {
+  if (existsSync4(path2)) {
     try {
       unlinkSync2(path2);
     } catch {
@@ -136978,7 +137056,7 @@ var init_validate = __esm({
 });
 
 // src/bindings.ts
-import { readFileSync as readFileSync5, renameSync as renameSync3, writeFileSync as writeFileSync3 } from "node:fs";
+import { readFileSync as readFileSync4, renameSync as renameSync3, writeFileSync as writeFileSync3 } from "node:fs";
 var BindingStore;
 var init_bindings = __esm({
   "src/bindings.ts"() {
@@ -136991,7 +137069,7 @@ var init_bindings = __esm({
       }
       load() {
         try {
-          const raw = JSON.parse(readFileSync5(bindingsPath(), "utf8"));
+          const raw = JSON.parse(readFileSync4(bindingsPath(), "utf8"));
           for (const b of raw.bindings ?? []) {
             if (!b || typeof b.root !== "string" || typeof b.chatId !== "string") continue;
             b.notifyIdle = b.notifyIdle === true;
@@ -137199,15 +137277,17 @@ function sayCard(body, projectLabel2, title, state = "running") {
 function notifyCard(p, projectLabel2) {
   return card({ icon: "\u{1F4E3}", title: `[${projectLabel2}] ${p.title}`, template: "wathet" }, [md(p.body)]);
 }
-function missedMirrorCard(projectLabel2, task, tail) {
+function missedMirrorCard(projectLabel2, task, text, source = "terminal") {
   const head = task ? `**${task}**
 
 ` : "";
-  const body = tail ? `${head}\u8FD9\u4E00\u8F6E\u7ED3\u675F\u4E86\uFF0C\u4F46\u5B83\u4E00\u4E2A\u5B57\u90FD\u6CA1\u53D1\u5230\u7FA4\u91CC\u3002\u4E0B\u9762\u662F**\u7EC8\u7AEF\u91CC\u7684\u539F\u6587**\uFF08\u76F4\u63A5\u6284\u7684\u7EC8\u7AEF\u8F93\u51FA\uFF0C\u4E0D\u662F\u5B83\u6574\u7406\u8FC7\u7684\uFF09\uFF1A
+  const body = !text ? `${head}\u8FD9\u4E00\u8F6E\u7ED3\u675F\u4E86\uFF0C\u4F46\u5B83\u4E00\u4E2A\u5B57\u90FD\u6CA1\u53D1\u5230\u7FA4\u91CC\uFF0C\u539F\u6587\u4E5F\u6CA1\u8BFB\u5230\u3002\u5F97\u56DE\u7535\u8111\u770B\u3002` : source === "transcript" ? `${head}\u8FD9\u4E00\u8F6E\u7ED3\u675F\u4E86\uFF0C\u4F46\u5B83\u4E00\u4E2A\u5B57\u90FD\u6CA1\u53D1\u5230\u7FA4\u91CC\u3002\u4E0B\u9762\u662F**\u5B83\u8FD9\u4E00\u8F6E\u8BF4\u7684\u539F\u8BDD**\uFF1A
+
+${text}` : `${head}\u8FD9\u4E00\u8F6E\u7ED3\u675F\u4E86\uFF0C\u4F46\u5B83\u4E00\u4E2A\u5B57\u90FD\u6CA1\u53D1\u5230\u7FA4\u91CC\u3002\u4E0B\u9762\u662F**\u7EC8\u7AEF\u91CC\u7684\u539F\u6587**\uFF08\u76F4\u63A5\u6284\u7684\u7EC8\u7AEF\u8F93\u51FA\uFF0C\u8868\u683C\u53EF\u80FD\u88AB\u6298\u884C\uFF09\uFF1A
 
 \`\`\`
-${tail}
-\`\`\`` : `${head}\u8FD9\u4E00\u8F6E\u7ED3\u675F\u4E86\uFF0C\u4F46\u5B83\u4E00\u4E2A\u5B57\u90FD\u6CA1\u53D1\u5230\u7FA4\u91CC\uFF0C\u7EC8\u7AEF\u539F\u6587\u4E5F\u6CA1\u8BFB\u5230\u3002\u5F97\u56DE\u7535\u8111\u770B\u3002`;
+${text}
+\`\`\``;
   return card({ icon: "\u{1F507}", title: `[${projectLabel2}] \u5B83\u6CA1\u628A\u56DE\u590D\u540C\u6B65\u8FC7\u6765`, template: "orange" }, [
     md(body),
     { tag: "markdown", content: "<font color='grey'>\u8981\u63A5\u7740\u8BF4\u5C31\u76F4\u63A5\u5728\u8FD9\u513F\u56DE</font>", text_size: "notation" }
@@ -137325,9 +137405,9 @@ var daemon_exports = {};
 __export(daemon_exports, {
   runDaemon: () => runDaemon
 });
-import { appendFileSync, mkdirSync as mkdirSync3, readFileSync as readFileSync6, realpathSync, statSync as statSync2, writeFileSync as writeFileSync4, unlinkSync as unlinkSync3, existsSync as existsSync4 } from "node:fs";
+import { appendFileSync, mkdirSync as mkdirSync3, readFileSync as readFileSync5, realpathSync, statSync as statSync2, writeFileSync as writeFileSync4, unlinkSync as unlinkSync3, existsSync as existsSync5 } from "node:fs";
 import { createHash as createHash2, randomUUID as randomUUID2 } from "node:crypto";
-import { basename as basename2, join as join3, sep } from "node:path";
+import { basename as basename2, join as join4, sep } from "node:path";
 import { tmpdir } from "node:os";
 function log(event, detail = {}) {
   const line = `${(/* @__PURE__ */ new Date()).toISOString()} ${event} ${JSON.stringify(detail)}
@@ -137342,14 +137422,14 @@ function within(child, parent) {
   return child.startsWith(parent.endsWith(sep) ? parent : parent + sep);
 }
 function resolveSendable(path2, root) {
-  if (!existsSync4(path2)) return { error: `\u6587\u4EF6\u4E0D\u5B58\u5728\uFF1A${path2}` };
+  if (!existsSync5(path2)) return { error: `\u6587\u4EF6\u4E0D\u5B58\u5728\uFF1A${path2}` };
   let real;
   try {
     real = realpathSync(path2);
   } catch (err) {
     return { error: `\u8DEF\u5F84\u89E3\u6790\u5931\u8D25\uFF1A${String(err)}` };
   }
-  const allowed = [root, join3(homeDir(), "media"), tmpdir()].map((d) => {
+  const allowed = [root, join4(homeDir(), "media"), tmpdir()].map((d) => {
     try {
       return realpathSync(d);
     } catch {
@@ -137361,7 +137441,7 @@ function resolveSendable(path2, root) {
       error: `\u62D2\u7EDD\u53D1\u9001 ${real}
 \u53EA\u80FD\u53D1\u8FD9\u4E9B\u76EE\u5F55\u4E0B\u7684\u6587\u4EF6\uFF1A
   \u672C\u9879\u76EE ${root}
-  ${join3(homeDir(), "media")}
+  ${join4(homeDir(), "media")}
   ${tmpdir()}
 \uFF08\u8FD9\u662F\u9632\u6B62 send-file \u88AB\u7528\u6765\u628A\u673A\u5668\u4E0A\u4EFB\u610F\u6587\u4EF6\u8BFB\u8D70\uFF09`
     };
@@ -137371,7 +137451,7 @@ function resolveSendable(path2, root) {
   const cap = isImage ? MAX_IMAGE_BYTES : MAX_FILE_BYTES;
   if (st.size > cap)
     return { error: `\u6587\u4EF6\u592A\u5927\uFF1A${(st.size / 1024 / 1024).toFixed(1)} MB\uFF0C\u4E0A\u9650 ${cap / 1024 / 1024} MB` };
-  return { real, bytes: readFileSync6(real) };
+  return { real, bytes: readFileSync5(real) };
 }
 async function runDaemon() {
   const creds = resolveCreds();
@@ -137380,7 +137460,7 @@ async function runDaemon() {
     process.exit(4);
   }
   ensureHomeDir();
-  if (existsSync4(sockPath())) {
+  if (existsSync5(sockPath())) {
     const { request: request2 } = await Promise.resolve().then(() => (init_ipc(), ipc_exports));
     const probe = await request2({ type: "ping" }, { timeoutMs: 2e3 });
     if (probe.ok) {
@@ -137503,16 +137583,19 @@ async function runDaemon() {
     const injected = lastInject.get(b.key);
     if (!injected) return;
     if (missAlerted.get(b.key) === injected) return;
-    const tail = await paneTail(paneId);
+    const path2 = findTranscript(b.sessionId);
+    const turn = path2 ? lastTurn(path2) : null;
+    const source = turn ? "transcript" : "terminal";
+    const tail = turn ? turn.text : await paneTail(paneId);
     const tailChars = tail ? tail.replace(/\s+/g, " ").trim().length : 0;
     const mirrored = (recentSays.get(b.key) ?? []).filter((r) => r.at >= injected).reduce((sum, r) => sum + r.chars, 0);
     if (tailChars && mirrored >= tailChars * MIRRORED_ENOUGH) return;
     missAlerted.set(b.key, injected);
     log("mirror.missed-check", { key: b.key, mirrored, tailChars });
     try {
-      await channel.send(b.chatId, { card: missedMirrorCard(b.label, b.task, tail) });
+      await channel.send(b.chatId, { card: missedMirrorCard(b.label, b.task, tail, source) });
       markOutbound(b.key);
-      log("mirror.missed", { key: b.key, hadTail: !!tail });
+      log("mirror.missed", { key: b.key, source, chars: tail?.length ?? 0 });
     } catch (err) {
       log("mirror.missed-failed", { key: b.key, err: String(err).slice(0, 160) });
     }
@@ -137578,7 +137661,7 @@ async function runDaemon() {
   };
   const transcribe = async (audioPath) => {
     try {
-      const b64 = readFileSync6(audioPath).toString("base64");
+      const b64 = readFileSync5(audioPath).toString("base64");
       const res = await channel.rawClient.speech_to_text.speech.fileRecognize({
         data: {
           speech: { speech: b64 },
@@ -137595,13 +137678,13 @@ async function runDaemon() {
   const saveResources = async (msg) => {
     const out = { files: [], spoken: [], unheard: 0 };
     if (!msg.resources.length) return out;
-    const dir = join3(homeDir(), "media", createHash2("sha1").update(msg.chatId).digest("hex").slice(0, 12));
+    const dir = join4(homeDir(), "media", createHash2("sha1").update(msg.chatId).digest("hex").slice(0, 12));
     mkdirSync3(dir, { recursive: true, mode: 448 });
     for (const res of msg.resources) {
       const kind = res.type === "image" ? "image" : "file";
       const ext = res.type === "image" ? "png" : res.type === "audio" ? "opus" : "bin";
       const name = res.fileName ?? `${res.type}-${Date.now()}.${ext}`;
-      const dest = join3(dir, `${Date.now()}-${name}`);
+      const dest = join4(dir, `${Date.now()}-${name}`);
       try {
         await channel.downloadResourceToFile(msg.messageId, res.fileKey, kind, dest);
       } catch (err) {
@@ -137835,7 +137918,7 @@ ${list}`;
     server?.close();
     for (const f of [sockPath(), pidPath()]) {
       try {
-        if (existsSync4(f)) unlinkSync3(f);
+        if (existsSync5(f)) unlinkSync3(f);
       } catch {
       }
     }
@@ -138168,6 +138251,7 @@ var init_daemon = __esm({
     init_cards();
     init_creds();
     init_herdr();
+    init_transcript();
     init_ipc();
     init_paths();
     init_validate();
@@ -138191,58 +138275,13 @@ var import_qrcode = __toESM(require_lib3(), 1);
 init_creds();
 init_creds();
 init_herdr();
-import { spawn } from "node:child_process";
-import { existsSync as existsSync5, openSync, readFileSync as readFileSync7, realpathSync as realpathSync2, unlinkSync as unlinkSync4 } from "node:fs";
-import { fileURLToPath } from "node:url";
-
-// src/transcript.ts
-import { readFileSync as readFileSync2 } from "node:fs";
-var blocks = (line) => {
-  const c = line.message?.content;
-  return Array.isArray(c) ? c : [];
-};
-var isTurnStart = (line) => {
-  if (line.type !== "user" || line.isSidechain) return false;
-  if (typeof line.message?.content === "string") return true;
-  return blocks(line).some((b) => b.type !== "tool_result");
-};
-function lastTurn(transcriptPath) {
-  let raw;
-  try {
-    raw = readFileSync2(transcriptPath, "utf8");
-  } catch {
-    return null;
-  }
-  const lines = [];
-  for (const ln of raw.split("\n")) {
-    if (!ln.trim()) continue;
-    try {
-      lines.push(JSON.parse(ln));
-    } catch {
-    }
-  }
-  let start = -1;
-  for (let i = lines.length - 1; i >= 0; i -= 1) {
-    if (isTurnStart(lines[i])) {
-      start = i;
-      break;
-    }
-  }
-  if (start < 0) return null;
-  const said = [];
-  for (const line of lines.slice(start + 1)) {
-    if (line.type !== "assistant" || line.isSidechain) continue;
-    for (const b of blocks(line)) if (b.type === "text" && b.text?.trim()) said.push(b.text.trim());
-  }
-  if (!said.length) return null;
-  const startedAt = Date.parse(lines[start].timestamp ?? "") || Date.now();
-  return { text: said.join("\n\n"), startedAt };
-}
-
-// src/cli.ts
+init_transcript();
 init_ipc();
 init_paths();
 init_validate();
+import { spawn } from "node:child_process";
+import { existsSync as existsSync6, openSync as openSync2, readFileSync as readFileSync6, realpathSync as realpathSync2, unlinkSync as unlinkSync4 } from "node:fs";
+import { fileURLToPath } from "node:url";
 for (const stream of [process.stdout, process.stderr]) {
   stream.on("error", (err) => {
     if (err.code === "EPIPE") return;
@@ -138467,7 +138506,7 @@ async function daemonAlive() {
 async function startDaemonDetached() {
   if (await daemonAlive()) return { ok: true, message: "daemon \u5DF2\u7ECF\u5728\u8DD1\u4E86" };
   ensureHomeDir();
-  const out = openSync(logPath(), "a");
+  const out = openSync2(logPath(), "a");
   const self2 = fileURLToPath(import.meta.url);
   const child = spawn(process.execPath, [self2, "daemon"], { detached: true, stdio: ["ignore", out, out] });
   child.unref();
@@ -138492,7 +138531,7 @@ async function cmdDaemon(args) {
   }
   if (flag(args, "stop")) {
     if (!isDaemonListening()) {
-      if (existsSync5(pidPath())) unlinkSync4(pidPath());
+      if (existsSync6(pidPath())) unlinkSync4(pidPath());
       process.stdout.write("daemon: \u672C\u6765\u5C31\u6CA1\u5728\u8DD1\n");
       return;
     }
@@ -138509,11 +138548,11 @@ async function cmdDaemon(args) {
     if (!res.ok) die(3, res.message);
     let pid = 0;
     try {
-      pid = Number(readFileSync7(pidPath(), "utf8").trim()) || 0;
+      pid = Number(readFileSync6(pidPath(), "utf8").trim()) || 0;
     } catch {
     }
     const alive = () => {
-      if (!pid) return existsSync5(sockPath());
+      if (!pid) return existsSync6(sockPath());
       try {
         process.kill(pid, 0);
         return true;
@@ -138526,7 +138565,7 @@ async function cmdDaemon(args) {
       die(3, `daemon (pid ${pid}) \u8BF4\u505C\u4E86\u4F46\u8FDB\u7A0B\u8FD8\u5728\u3002\u5F3A\u5236\u7ED3\u675F\uFF1Akill ${pid}\uFF0C\u7136\u540E herdr-lark daemon --detach`);
     for (const f of [sockPath(), pidPath()]) {
       try {
-        if (existsSync5(f)) unlinkSync4(f);
+        if (existsSync6(f)) unlinkSync4(f);
       } catch {
       }
     }

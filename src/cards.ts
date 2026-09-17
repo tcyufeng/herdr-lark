@@ -218,11 +218,22 @@ export function notifyCard(p: NotifyPayload, projectLabel: string): object {
  * device they are actually holding, and carries the terminal's own output so
  * the card is worth something on its own.
  */
-export function missedMirrorCard(projectLabel: string, task: string | null, tail: string | null): object {
+export function missedMirrorCard(
+  projectLabel: string,
+  task: string | null,
+  text: string | null,
+  source: 'transcript' | 'terminal' = 'terminal',
+): object {
   const head = task ? `**${task}**\n\n` : '';
-  const body = tail
-    ? `${head}这一轮结束了，但它一个字都没发到群里。下面是**终端里的原文**（直接抄的终端输出，不是它整理过的）：\n\n\`\`\`\n${tail}\n\`\`\``
-    : `${head}这一轮结束了，但它一个字都没发到群里，终端原文也没读到。得回电脑看。`;
+  // From the transcript it is the agent's own markdown and renders properly.
+  // Scraped off the terminal it is a picture of a screen: tables wrapped to the
+  // pane width, long answers cut. Say which one this is rather than letting a
+  // mangled table look like the agent's doing.
+  const body = !text
+    ? `${head}这一轮结束了，但它一个字都没发到群里，原文也没读到。得回电脑看。`
+    : source === 'transcript'
+      ? `${head}这一轮结束了，但它一个字都没发到群里。下面是**它这一轮说的原话**：\n\n${text}`
+      : `${head}这一轮结束了，但它一个字都没发到群里。下面是**终端里的原文**（直接抄的终端输出，表格可能被折行）：\n\n\`\`\`\n${text}\n\`\`\``;
   return card({ icon: '🔇', title: `[${projectLabel}] 它没把回复同步过来`, template: 'orange' }, [
     md(body),
     { tag: 'markdown', content: "<font color='grey'>要接着说就直接在这儿回</font>", text_size: 'notation' },

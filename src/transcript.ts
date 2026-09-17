@@ -1,4 +1,6 @@
-import { readFileSync } from 'node:fs';
+import { closeSync, existsSync, fstatSync, openSync, readSync, readdirSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 
 export interface Turn {
   /** Everything the agent said to the human this turn, in order. */
@@ -36,6 +38,35 @@ const isTurnStart = (line: Line): boolean => {
 };
 
 /**
+ * The last slice of a file, as text starting at a line boundary.
+ *
+ * Transcripts grow without bound — 544 MB observed on a long-running session —
+ * and `readFileSync(path, 'utf8')` throws ERR_STRING_TOO_LONG past roughly half
+ * a gigabyte. That failure was silent: the mirror hook simply stopped working
+ * on exactly the sessions that had been talking the longest, which are the ones
+ * the human most wants mirrored. Only the tail was ever needed.
+ */
+const TAIL_BYTES = 16 * 1024 * 1024;
+
+function readTail(path: string): string | null {
+  let fd: number | null = null;
+  try {
+    fd = openSync(path, 'r');
+    const size = fstatSync(fd).size;
+    const len = Math.min(size, TAIL_BYTES);
+    const buf = Buffer.allocUnsafe(len);
+    readSync(fd, buf, 0, len, size - len);
+    const text = buf.toString('utf8');
+    // The window almost certainly opened mid-line; that fragment is not JSON.
+    return len < size ? text.slice(text.indexOf('\n') + 1) : text;
+  } catch {
+    return null;
+  } finally {
+    if (fd !== null) closeSync(fd);
+  }
+}
+
+/**
  * The agent's own words from the last turn of a Claude Code transcript.
  *
  * Every `text` block since the last human message is included, not just the
@@ -47,12 +78,8 @@ const isTurnStart = (line: Line): boolean => {
  * were never shown to the human in this pane.
  */
 export function lastTurn(transcriptPath: string): Turn | null {
-  let raw: string;
-  try {
-    raw = readFileSync(transcriptPath, 'utf8');
-  } catch {
-    return null;
-  }
+  const raw = readTail(transcriptPath);
+  if (raw === null) return null;
   const lines: Line[] = [];
   for (const ln of raw.split('\n')) {
     if (!ln.trim()) continue;
@@ -78,4 +105,30 @@ export function lastTurn(transcriptPath: string): Turn | null {
   if (!said.length) return null;
   const startedAt = Date.parse(lines[start]!.timestamp ?? '') || Date.now();
   return { text: said.join('\n\n'), startedAt };
+}
+
+/**
+ * The Claude Code transcript for a session, wherever it landed.
+ *
+ * Claude Code files transcripts under a directory named after the working
+ * directory it was started in, which is not always the project root a binding
+ * records — a session that started in a subdirectory files elsewhere. So look
+ * the session id up across all of them rather than computing one path.
+ *
+ * Returns null for any other agent CLI, which is the point: the caller falls
+ * back to reading the terminal.
+ */
+export function findTranscript(sessionId: string | null): string | null {
+  if (!sessionId) return null;
+  const root = join(process.env.CLAUDE_CONFIG_DIR?.trim() || join(homedir(), '.claude'), 'projects');
+  if (!existsSync(root)) return null;
+  try {
+    for (const dir of readdirSync(root)) {
+      const candidate = join(root, dir, `${sessionId}.jsonl`);
+      if (existsSync(candidate)) return candidate;
+    }
+  } catch {
+    // Unreadable config dir: fall back to the terminal like any other agent.
+  }
+  return null;
 }
