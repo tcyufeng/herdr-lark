@@ -140,6 +140,19 @@ export function askCard(ctx: AskCardContext): object {
     md(`**${T.question}**　${p.question}`),
   );
 
+  // A closed card ends with its outcome, where the buttons used to be. The
+  // "your reply" line at the top is only seen by someone reading from the
+  // start; after a tap the eye is at the bottom, and a card that merely loses
+  // its buttons reads as if the choice went nowhere.
+  if (state !== 'pending') {
+    elements.push(
+      hr(),
+      state === 'answered' && ctx.reply
+        ? md(`✅ **${T.yourReply}**　${ctx.reply}`)
+        : note(state === 'timedout' ? `⌛ ${T.timedout}` : `⚠️ ${T.cancelled}`),
+    );
+  }
+
   if (state === 'pending') {
     for (const o of p.options) {
       const button: Record<string, unknown> = {

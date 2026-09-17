@@ -137158,6 +137158,12 @@ ${optionLines(p.options, p.recommend, lang)}`),
     md(field(T.recommend, p.reasoning)),
     md(`**${T.question}**\u3000${p.question}`)
   );
+  if (state !== "pending") {
+    elements.push(
+      hr(),
+      state === "answered" && ctx.reply ? md(`\u2705 **${T.yourReply}**\u3000${ctx.reply}`) : note(state === "timedout" ? `\u231B ${T.timedout}` : `\u26A0\uFE0F ${T.cancelled}`)
+    );
+  }
   if (state === "pending") {
     for (const o of p.options) {
       const button = {
