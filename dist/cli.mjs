@@ -137499,13 +137499,16 @@ async function runDaemon() {
     bindings.touch(b.key, { lastSay: { ...last, state } });
   };
   const alertMissedMirror = async (b, paneId, settled) => {
-    if (!b.away || !paneId || settled < TURN_SETTLE_POLLS) return;
+    if (!b.away || !paneId || settled !== TURN_SETTLE_POLLS) return;
     const injected = lastInject.get(b.key);
     if (!injected) return;
-    if ((lastOutbound.get(b.key) ?? 0) > injected) return;
     if (missAlerted.get(b.key) === injected) return;
-    missAlerted.set(b.key, injected);
     const tail = await paneTail(paneId);
+    const tailChars = tail ? tail.replace(/\s+/g, " ").trim().length : 0;
+    const mirrored = (recentSays.get(b.key) ?? []).filter((r) => r.at >= injected).reduce((sum, r) => sum + r.chars, 0);
+    if (tailChars && mirrored >= tailChars * MIRRORED_ENOUGH) return;
+    missAlerted.set(b.key, injected);
+    log("mirror.missed-check", { key: b.key, mirrored, tailChars });
     try {
       await channel.send(b.chatId, { card: missedMirrorCard(b.label, b.task, tail) });
       markOutbound(b.key);

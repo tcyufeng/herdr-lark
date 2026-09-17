@@ -308,14 +308,24 @@ export async function runDaemon(): Promise<void> {
    * their phone instead of inside the conversation they are having.
    */
   const alertMissedMirror = async (b: Binding, paneId: string | null, settled: number): Promise<void> => {
-    if (!b.away || !paneId || settled < TURN_SETTLE_POLLS) return;
+    // Exactly once per settle: reading the pane shells out to herdr, and the
+    // rest of this runs on every poll for every bound session.
+    if (!b.away || !paneId || settled !== TURN_SETTLE_POLLS) return;
     const injected = lastInject.get(b.key);
     if (!injected) return;
-    // Something did go out after the message arrived: the rule was followed.
-    if ((lastOutbound.get(b.key) ?? 0) > injected) return;
     if (missAlerted.get(b.key) === injected) return;
-    missAlerted.set(b.key, injected);
     const tail = await paneTail(paneId);
+    // "Something went out" is not the test. An agent that mirrored a one-line
+    // correction and then wrote a page of tables satisfies it while the human
+    // sees almost nothing — observed: 78 characters sent for a turn that filled
+    // the terminal. Weigh what reached the group against what the pane holds.
+    const tailChars = tail ? tail.replace(/\s+/g, ' ').trim().length : 0;
+    const mirrored = (recentSays.get(b.key) ?? [])
+      .filter((r) => r.at >= injected)
+      .reduce((sum, r) => sum + r.chars, 0);
+    if (tailChars && mirrored >= tailChars * MIRRORED_ENOUGH) return;
+    missAlerted.set(b.key, injected);
+    log('mirror.missed-check', { key: b.key, mirrored, tailChars });
     try {
       await channel.send(b.chatId, { card: missedMirrorCard(b.label, b.task, tail) });
       markOutbound(b.key);
