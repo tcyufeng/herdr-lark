@@ -6,12 +6,16 @@
 >
 > 下文 `herdr-lark` = 这个 skill 的 CLI。
 
-## 状态在哪：`<项目根>/.herdr-lark/state.json`（CLI 写，你只读）
+## 状态在哪：问 `herdr-lark away status --json`
 
 - **会话开始 / 上下文被清空或重置后**，先 `herdr-lark away status --json`：
-  `away: true` ⇒ 本项目已在远程模式，照「模式内」办；文件不存在或 `false` ⇒ 正常终端交互。
-- 字段：`away`（开关）· `chatId`（本项目绑定的飞书群）· `paneId`（手机消息注入回哪个窗格）。
-- 你自己不要手改这个文件，只经 `away` / `bind` 命令改。
+  `away: true` ⇒ 你这个会话已在远程模式，照「模式内」办；`false` 或没有 `chatId` ⇒ 正常终端交互。
+- 字段：`away`（开关）· `chatId`（**你这个会话**绑定的飞书群）· `paneId`（手机消息注入回哪个窗格）·
+  `session`（它按哪个会话查的）· `source`（`daemon` 是权威；`state.json` 表示 daemon 没在跑，结果可能不是你的）。
+- **不要直接读 `<项目根>/.herdr-lark/state.json`**。它按目录存，同一个仓库里的所有会话共用一份，
+  里面是最后写它的那个会话的信息。拿它当自己的状态，就会把别人的群当成自己的群。
+- **绝不要用 `bind --chat` 去绑一个你从别处看来的群号。** 要群就跑 `away on`，它会给你找对的那个；
+  那个群如果已经归另一个还在跑的会话，`bind` 会拒绝并退出 4。
 
 ## 一个会话一个群
 

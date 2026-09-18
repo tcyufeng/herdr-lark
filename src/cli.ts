@@ -522,17 +522,40 @@ async function cmdAway(args: string[]): Promise<void> {
   const c = caller();
   const root = c.root;
   if (sub === 'status') {
-    const state = readProjectState(root);
+    // Ask the daemon for *this session's* binding. `.herdr-lark/state.json`
+    // lives in the project directory, so every session in one repo shares it,
+    // and it ends up holding whichever wrote last — one session's group next to
+    // another's pane. An agent that read it as its own took that group:
+    // observed, a session ran `bind --chat` onto its neighbour's chat straight
+    // from this file. The file is only a fallback for when the daemon is down.
+    let state: { away: boolean; chatId: string | null; paneId: string | null; target: string; updated: string } | null =
+      null;
+    let source = 'daemon';
+    const res = await request({ type: 'list' }, { timeoutMs: 5_000 });
+    if (res.ok && res.kind === 'list') {
+      const mine = res.bindings.find((x) => x.key === c.key);
+      state = mine
+        ? { away: mine.away, chatId: mine.chatId, paneId: mine.paneId, target: mine.root, updated: '' }
+        : { away: false, chatId: null, paneId: null, target: root, updated: '' };
+    } else {
+      source = 'state.json';
+      const file = readProjectState(root);
+      state = file ? { ...file, chatId: file.chatId ?? null, paneId: file.paneId ?? null } : null;
+    }
     if (flag(args, 'json')) {
-      process.stdout.write(`${JSON.stringify(state ?? { away: false, chatId: null, paneId: null, target: root, updated: '' })}\n`);
+      process.stdout.write(
+        `${JSON.stringify({ ...(state ?? { away: false, chatId: null, paneId: null, target: root, updated: '' }), session: c.sessionId, source })}\n`,
+      );
       return;
     }
-    if (!state) {
-      process.stdout.write('这个项目还没用过 herdr-lark（没有 .herdr-lark/state.json）\n');
+    if (!state || !state.chatId) {
+      process.stdout.write('这个会话还没绑定飞书群\n');
       return;
     }
     process.stdout.write(
-      `远程模式：${state.away ? '开' : '关'}　群：${state.chatId ?? '未绑定'}　窗格：${state.paneId ?? '无'}\n`,
+      `远程模式：${state.away ? '开' : '关'}　群：${state.chatId}　窗格：${state.paneId ?? '无'}` +
+        (source === 'daemon' ? '' : '　（daemon 没在跑，读的是项目里的 state.json，可能是别的会话写的）') +
+        '\n',
     );
     return;
   }

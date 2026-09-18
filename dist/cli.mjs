@@ -138726,19 +138726,30 @@ async function cmdAway(args) {
   const c = caller();
   const root = c.root;
   if (sub === "status") {
-    const state = readProjectState(root);
+    let state = null;
+    let source = "daemon";
+    const res2 = await request({ type: "list" }, { timeoutMs: 5e3 });
+    if (res2.ok && res2.kind === "list") {
+      const mine = res2.bindings.find((x) => x.key === c.key);
+      state = mine ? { away: mine.away, chatId: mine.chatId, paneId: mine.paneId, target: mine.root, updated: "" } : { away: false, chatId: null, paneId: null, target: root, updated: "" };
+    } else {
+      source = "state.json";
+      const file = readProjectState(root);
+      state = file ? { ...file, chatId: file.chatId ?? null, paneId: file.paneId ?? null } : null;
+    }
     if (flag(args, "json")) {
-      process.stdout.write(`${JSON.stringify(state ?? { away: false, chatId: null, paneId: null, target: root, updated: "" })}
-`);
+      process.stdout.write(
+        `${JSON.stringify({ ...state ?? { away: false, chatId: null, paneId: null, target: root, updated: "" }, session: c.sessionId, source })}
+`
+      );
       return;
     }
-    if (!state) {
-      process.stdout.write("\u8FD9\u4E2A\u9879\u76EE\u8FD8\u6CA1\u7528\u8FC7 herdr-lark\uFF08\u6CA1\u6709 .herdr-lark/state.json\uFF09\n");
+    if (!state || !state.chatId) {
+      process.stdout.write("\u8FD9\u4E2A\u4F1A\u8BDD\u8FD8\u6CA1\u7ED1\u5B9A\u98DE\u4E66\u7FA4\n");
       return;
     }
     process.stdout.write(
-      `\u8FDC\u7A0B\u6A21\u5F0F\uFF1A${state.away ? "\u5F00" : "\u5173"}\u3000\u7FA4\uFF1A${state.chatId ?? "\u672A\u7ED1\u5B9A"}\u3000\u7A97\u683C\uFF1A${state.paneId ?? "\u65E0"}
-`
+      `\u8FDC\u7A0B\u6A21\u5F0F\uFF1A${state.away ? "\u5F00" : "\u5173"}\u3000\u7FA4\uFF1A${state.chatId}\u3000\u7A97\u683C\uFF1A${state.paneId ?? "\u65E0"}` + (source === "daemon" ? "" : "\u3000\uFF08daemon \u6CA1\u5728\u8DD1\uFF0C\u8BFB\u7684\u662F\u9879\u76EE\u91CC\u7684 state.json\uFF0C\u53EF\u80FD\u662F\u522B\u7684\u4F1A\u8BDD\u5199\u7684\uFF09") + "\n"
     );
     return;
   }
