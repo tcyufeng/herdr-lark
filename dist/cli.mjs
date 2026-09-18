@@ -137409,6 +137409,12 @@ import { appendFileSync, mkdirSync as mkdirSync3, readFileSync as readFileSync5,
 import { createHash as createHash2, randomUUID as randomUUID2 } from "node:crypto";
 import { basename as basename2, join as join4, sep } from "node:path";
 import { tmpdir } from "node:os";
+function isTransientTitle(title, agent) {
+  const t2 = title.trim().toLowerCase();
+  if (!t2 || t2 === "claude code" || t2 === "claude") return true;
+  if (agent && (t2 === agent.toLowerCase() || t2.startsWith(`${agent.toLowerCase()} `))) return true;
+  return /^claude\s+-/.test(t2);
+}
 function log(event, detail = {}) {
   const line = `${(/* @__PURE__ */ new Date()).toISOString()} ${event} ${JSON.stringify(detail)}
 `;
@@ -137772,10 +137778,11 @@ ${list}`;
     if (!all.length) return;
     const agents = await agentList();
     for (const b of all) {
-      const a = (b.sessionId ? agents.find((x) => x.agent_session?.value === b.sessionId) : void 0) ?? agents.find((x) => x.pane_id === b.paneId);
+      const a = b.sessionId ? agents.find((x) => x.agent_session?.value === b.sessionId) : void 0;
       if (a && a.pane_id !== b.paneId) bindings.touch(b.key, { paneId: a.pane_id });
       const task = a?.terminal_title_stripped?.trim();
-      if (task && groupName(b.label, task) !== b.namedAs) await renameChat(b, task);
+      if (task && !isTransientTitle(task, a?.agent) && groupName(b.label, task) !== b.namedAs)
+        await renameChat(b, task);
       const status = a?.agent_status;
       const settled = !status || status === "working" || status === "unknown" ? 0 : (settledPolls.get(b.key) ?? 0) + 1;
       settledPolls.set(b.key, settled);
@@ -137962,6 +137969,16 @@ ${list}`;
           const c = req.caller;
           const existing = bindings.get(c.key);
           if (req.chatId) {
+            const live = await liveSessions();
+            const holder = bindings.all().find((x) => x.chatId === req.chatId && x.key !== c.key && !!x.sessionId && live.has(x.sessionId));
+            if (holder) {
+              log("bind.refused", { key: c.key, chatId: req.chatId, heldBy: holder.key });
+              return {
+                ok: false,
+                code: 4,
+                message: `\u8FD9\u4E2A\u7FA4\u5DF2\u7ECF\u7ED1\u7740\u53E6\u4E00\u4E2A\u8FD8\u5728\u8DD1\u7684\u4F1A\u8BDD\uFF08${holder.task ?? holder.label}\uFF09\u3002\u4E24\u4E2A\u4F1A\u8BDD\u5171\u7528\u4E00\u4E2A\u7FA4\uFF0C\u624B\u673A\u4E0A\u7684\u56DE\u590D\u4F1A\u88AB\u6295\u7ED9\u5176\u4E2D\u968F\u4FBF\u4E00\u4E2A\u3002\u4E0D\u5E26 --chat \u91CD\u8DD1 bind\uFF0C\u4F1A\u7ED9\u4F60\u5F00\u4E00\u4E2A\u81EA\u5DF1\u7684\u7FA4\u3002`
+              };
+            }
             const b = {
               key: c.key,
               sessionId: c.sessionId,
@@ -137992,7 +138009,11 @@ ${list}`;
               key: c.key,
               sessionId: c.sessionId,
               task: c.task,
-              label: c.project,
+              // The group keeps the project it was made for; only the task
+              // half of its name follows the new session. Taking the caller's
+              // current directory here renamed a group after wherever the
+              // agent happened to have cd'd, while its root stayed put.
+              label: projectLabel(prior.root),
               paneId: c.paneId ?? prior.paneId
             };
             bindings.set(moved);

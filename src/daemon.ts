@@ -10,7 +10,7 @@ import { resolveCreds } from './creds.js';
 import { agentList, findPaneForProject, findPaneForSession, paneStarted, paneTail, promptPane, sendKeys } from './herdr.js';
 import { findTranscript, lastTurn } from './transcript.js';
 import { serve, type Caller, type Request, type Response } from './ipc.js';
-import { ensureHomeDir, homeDir, logPath, pidPath, sockPath } from './paths.js';
+import { ensureHomeDir, homeDir, logPath, pidPath, projectLabel, sockPath } from './paths.js';
 import { validateAsk, validateNotify, ValidationError, type AskPayload } from './validate.js';
 
 const INJECT_PREFIX = '[herdr-lark remote] ';
@@ -37,6 +37,19 @@ const INJECT_SUBMIT_WAIT_MS = 8_000;
  * turn, so one reading proves nothing — this is the same flicker that made an
  * earlier "you forgot to mirror" nudge fire on live conversations.
  */
+/**
+ * A terminal title the agent shows before it knows what it is working on: its
+ * own product name while starting, or the command line it was launched with.
+ * Naming a group after one of these for a few seconds is how a chat list ends
+ * up reading "claude --resume 4e9c068a-…".
+ */
+function isTransientTitle(title: string, agent?: string): boolean {
+  const t = title.trim().toLowerCase();
+  if (!t || t === 'claude code' || t === 'claude') return true;
+  if (agent && (t === agent.toLowerCase() || t.startsWith(`${agent.toLowerCase()} `))) return true;
+  return /^claude\s+-/.test(t);
+}
+
 const TURN_SETTLE_POLLS = 3;
 /**
  * How much of a turn's length must already have reached the group for the
@@ -585,16 +598,20 @@ export async function runDaemon(): Promise<void> {
     // Keep every group's name current, whether or not remote mode is on: the
     // human reads the chat list even while sitting at the keyboard.
     for (const b of all) {
-      const a =
-        (b.sessionId ? agents.find((x) => x.agent_session?.value === b.sessionId) : undefined) ??
-        agents.find((x) => x.pane_id === b.paneId);
+      // Only the binding's own session. Falling back to "whatever is in that
+      // pane now" let a stranger rename the group: a new session started in a
+      // pane whose old session had ended, and the old task's group was renamed
+      // after the new task before anyone bound it. A `/clear` takeover goes
+      // through `bind`, which claims the group properly.
+      const a = b.sessionId ? agents.find((x) => x.agent_session?.value === b.sessionId) : undefined;
       if (a && a.pane_id !== b.paneId) bindings.touch(b.key, { paneId: a.pane_id });
       // Compare against the name the group actually carries, not against
       // `task` — that field is rewritten by every CLI call, so it agrees with
       // the title before the rename ever runs. A binding from before this was
       // recorded has no `namedAs`, so it gets one corrective rename.
       const task = a?.terminal_title_stripped?.trim();
-      if (task && groupName(b.label, task) !== b.namedAs) await renameChat(b, task);
+      if (task && !isTransientTitle(task, a?.agent) && groupName(b.label, task) !== b.namedAs)
+        await renameChat(b, task);
       const status = a?.agent_status;
       const settled =
         !status || status === 'working' || status === 'unknown' ? 0 : (settledPolls.get(b.key) ?? 0) + 1;
@@ -821,6 +838,25 @@ export async function runDaemon(): Promise<void> {
           const c = req.caller;
           const existing = bindings.get(c.key);
           if (req.chatId) {
+            // One group, one session. A second live session in the same group
+            // means a message from the phone reaches whichever of them the
+            // lookup happens to pick — the wrong agent acting on the human's
+            // instruction, which is the whole reason bindings are per session.
+            // Observed: a session ran `bind --chat` onto its neighbour's group.
+            const live = await liveSessions();
+            const holder = bindings
+              .all()
+              .find((x) => x.chatId === req.chatId && x.key !== c.key && !!x.sessionId && live.has(x.sessionId));
+            if (holder) {
+              log('bind.refused', { key: c.key, chatId: req.chatId, heldBy: holder.key });
+              return {
+                ok: false,
+                code: 4,
+                message:
+                  `这个群已经绑着另一个还在跑的会话（${holder.task ?? holder.label}）。` +
+                  '两个会话共用一个群，手机上的回复会被投给其中随便一个。不带 --chat 重跑 bind，会给你开一个自己的群。',
+              };
+            }
             const b: Binding = {
               key: c.key,
               sessionId: c.sessionId,
@@ -866,7 +902,11 @@ export async function runDaemon(): Promise<void> {
               key: c.key,
               sessionId: c.sessionId,
               task: c.task,
-              label: c.project,
+              // The group keeps the project it was made for; only the task
+              // half of its name follows the new session. Taking the caller's
+              // current directory here renamed a group after wherever the
+              // agent happened to have cd'd, while its root stayed put.
+              label: projectLabel(prior.root),
               paneId: c.paneId ?? prior.paneId,
             };
             bindings.set(moved);
