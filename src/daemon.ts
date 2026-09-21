@@ -476,8 +476,10 @@ export async function runDaemon(): Promise<void> {
   };
 
   /** Save an inbound attachment next to the daemon's state, never in the repo. */
-  const saveResources = async (msg: NormalizedMessage): Promise<{ files: string[]; spoken: string[]; unheard: number }> => {
-    const out = { files: [] as string[], spoken: [] as string[], unheard: 0 };
+  const saveResources = async (
+    msg: NormalizedMessage,
+  ): Promise<{ files: { key: string; path: string }[]; spoken: string[]; unheard: number }> => {
+    const out = { files: [] as { key: string; path: string }[], spoken: [] as string[], unheard: 0 };
     if (!msg.resources.length) return out;
     const dir = join(homeDir(), 'media', createHash('sha1').update(msg.chatId).digest('hex').slice(0, 12));
     mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -500,7 +502,7 @@ export async function runDaemon(): Promise<void> {
         else out.unheard += 1;
         continue;
       }
-      out.files.push(dest);
+      out.files.push({ key: res.fileKey, path: dest });
     }
     return out;
   };
@@ -532,10 +534,24 @@ export async function runDaemon(): Promise<void> {
         '请告诉用户：跑一次 herdr-lark setup --update 重新扫码补上这个权限，或者这次先打字。）';
       text = text ? `${text}\n${why}` : why;
     }
-    if (got.files.length) {
-      const list = got.files.map((f) => `  ${f}`).join('\n');
-      text = text ? `${text}\n（附件已存到本机）\n${list}` : `（我发了附件，已存到本机）\n${list}`;
+    // Put each file where its image sat in the message. Feishu's content marks
+    // the spot with `![image](<file key>)`, and that key means nothing on this
+    // machine — while a trailing list of paths lands oddly too: Claude Code
+    // swallows a pasted path into an `[Image #N]` attachment, leaving the label
+    // above it pointing at nothing. Substituted in place, the path reads as the
+    // picture in the sentence that mentions it, whichever agent is reading.
+    const loose: string[] = [];
+    for (const f of got.files) {
+      const inPlace = new RegExp(`!?\\[[^\\]]*\\]\\(${f.key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\)`, 'g');
+      // Function form: a file name from Feishu could contain `$&`, which a
+      // string replacement would expand into the matched placeholder.
+      if (inPlace.test(text)) text = text.replace(inPlace, () => f.path);
+      else loose.push(f.path);
     }
+    // Placeholders with no file behind them: the download failed, and leaving
+    // the key in would have the agent puzzling over an identifier.
+    text = text.replace(/!?\[[^\]]*\]\((?:img_v3|file_v3)[^)]*\)/g, '（有个附件没能下载）');
+    if (loose.length) text = `${text}\n${loose.join('\n')}`.trim();
     if (!text) return;
     const p = pendingFor(b.root);
     if (p) {

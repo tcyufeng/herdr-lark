@@ -137703,7 +137703,7 @@ async function runDaemon() {
         else out.unheard += 1;
         continue;
       }
-      out.files.push(dest);
+      out.files.push({ key: res.fileKey, path: dest });
     }
     return out;
   };
@@ -137725,13 +137725,15 @@ async function runDaemon() {
       text = text ? `${text}
 ${why}` : why;
     }
-    if (got.files.length) {
-      const list = got.files.map((f) => `  ${f}`).join("\n");
-      text = text ? `${text}
-\uFF08\u9644\u4EF6\u5DF2\u5B58\u5230\u672C\u673A\uFF09
-${list}` : `\uFF08\u6211\u53D1\u4E86\u9644\u4EF6\uFF0C\u5DF2\u5B58\u5230\u672C\u673A\uFF09
-${list}`;
+    const loose = [];
+    for (const f of got.files) {
+      const inPlace = new RegExp(`!?\\[[^\\]]*\\]\\(${f.key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\)`, "g");
+      if (inPlace.test(text)) text = text.replace(inPlace, () => f.path);
+      else loose.push(f.path);
     }
+    text = text.replace(/!?\[[^\]]*\]\((?:img_v3|file_v3)[^)]*\)/g, "\uFF08\u6709\u4E2A\u9644\u4EF6\u6CA1\u80FD\u4E0B\u8F7D\uFF09");
+    if (loose.length) text = `${text}
+${loose.join("\n")}`.trim();
     if (!text) return;
     const p = pendingFor(b.root);
     if (p) {
