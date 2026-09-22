@@ -29,6 +29,13 @@ const LINK_ALERT_AFTER_MS = 90_000;
 const LINK_FORCE_RECONNECT_AFTER_MS = 60_000;
 /** A reconnect loop that has been grinding this long is stuck, not working. */
 const LINK_STUCK_AFTER_MS = 300_000;
+/**
+ * How recently a group must have been talking for an outage to be worth
+ * telling it about. One drop otherwise fires a card into every group with
+ * remote mode on — five identical buzzes for one closed laptop lid — and the
+ * only group that needs the news is the one the human was mid-conversation in.
+ */
+const LINK_NOTIFY_ACTIVE_MS = 2 * 60 * 60_000;
 /** How long to wait for the pane's agent to actually start on an injected message. */
 const INJECT_SUBMIT_WAIT_MS = 8_000;
 /**
@@ -688,6 +695,8 @@ export async function runDaemon(): Promise<void> {
   // can报 its own half-failure. Without this the human sees replies arriving
   // normally and has no way to know their own messages are going nowhere.
   let downSince = 0;
+  /** Whether the 📵 warning actually reached anyone, so recovery can say so. */
+  let alertDelivered = false;
   let alerted = false;
   let lastForcedAt = 0;
   let reconnecting = false;
@@ -717,23 +726,41 @@ export async function runDaemon(): Promise<void> {
     }
   };
 
+  /** Groups that were in a conversation when the link went down. */
+  const groupsToNotify = (since: number): Binding[] =>
+    bindings.all().filter((b) => {
+      if (!b.away) return false;
+      const last = Math.max(lastOutbound.get(b.key) ?? 0, lastInject.get(b.key) ?? 0);
+      return last > 0 && since - last < LINK_NOTIFY_ACTIVE_MS;
+    });
+
   const checkLink = async (): Promise<void> => {
     const state = channel.getConnectionStatus()?.state;
     const healthy = state === 'connected';
     if (healthy) {
       if (alerted) {
         const downFor = Math.round((Date.now() - downSince) / 1000);
+        const mins = Math.max(1, Math.round(downFor / 60));
+        const targets = groupsToNotify(downSince);
+        // Say so plainly when the warning never got out. Every outage seen so
+        // far took the whole network with it — DNS included — so the 📵 card
+        // could not be sent, and this green one arrived on its own looking
+        // like an announcement with no event behind it.
+        const warned = alertDelivered;
+        const detail = warned
+          ? `断了 ${mins} 分钟，现在恢复了。断线期间你发的消息**没有送到**，需要的话重发一次。`
+          : `刚才断了 ${mins} 分钟，现在恢复了。**断线期间你发的消息没有送到**，需要的话重发一次。\n\n` +
+            '（当时整个网都不通，连「断了」这张卡都发不出来，所以你只看到这一张。）';
         alerted = false;
-        for (const b of bindings.all().filter((x) => x.away)) {
+        alertDelivered = false;
+        for (const b of targets) {
           try {
-            await channel.send(b.chatId, {
-              card: linkCard(b.label, 'back', `断了 ${downFor} 秒，现在恢复了。断线期间你发的消息**没有送到**，需要的话重发一次。`),
-            });
+            await channel.send(b.chatId, { card: linkCard(b.label, 'back', detail) });
           } catch {
             // the link just came back; a failure here is not worth cascading
           }
         }
-        log('link.recovered', { downForSec: downFor });
+        log('link.recovered', { downForSec: downFor, notified: targets.length, warned });
       }
       downSince = 0;
       return;
@@ -754,8 +781,9 @@ export async function runDaemon(): Promise<void> {
 
     if (alerted || down < LINK_ALERT_AFTER_MS) return;
     alerted = true;
-    log('link.down', { state });
-    for (const b of bindings.all().filter((x) => x.away)) {
+    const downTargets = groupsToNotify(downSince);
+    log('link.down', { state, notifying: downTargets.length });
+    for (const b of downTargets) {
       try {
         await channel.send(b.chatId, {
           card: linkCard(
@@ -766,6 +794,7 @@ export async function runDaemon(): Promise<void> {
               '在终端跑 `herdr-lark daemon --stop --force` 再 `herdr-lark daemon --detach`。',
           ),
         });
+        alertDelivered = true;
       } catch (err) {
         log('link.alert-failed', { key: b.key, err: String(err).slice(0, 120) });
       }

@@ -137828,6 +137828,7 @@ ${loose.join("\n")}`.trim();
     }
   };
   let downSince = 0;
+  let alertDelivered = false;
   let alerted = false;
   let lastForcedAt = 0;
   let reconnecting = false;
@@ -137854,22 +137855,32 @@ ${loose.join("\n")}`.trim();
       reconnecting = false;
     }
   };
+  const groupsToNotify = (since) => bindings.all().filter((b) => {
+    if (!b.away) return false;
+    const last = Math.max(lastOutbound.get(b.key) ?? 0, lastInject.get(b.key) ?? 0);
+    return last > 0 && since - last < LINK_NOTIFY_ACTIVE_MS;
+  });
   const checkLink = async () => {
     const state = channel.getConnectionStatus()?.state;
     const healthy = state === "connected";
     if (healthy) {
       if (alerted) {
         const downFor = Math.round((Date.now() - downSince) / 1e3);
+        const mins = Math.max(1, Math.round(downFor / 60));
+        const targets = groupsToNotify(downSince);
+        const warned = alertDelivered;
+        const detail = warned ? `\u65AD\u4E86 ${mins} \u5206\u949F\uFF0C\u73B0\u5728\u6062\u590D\u4E86\u3002\u65AD\u7EBF\u671F\u95F4\u4F60\u53D1\u7684\u6D88\u606F**\u6CA1\u6709\u9001\u5230**\uFF0C\u9700\u8981\u7684\u8BDD\u91CD\u53D1\u4E00\u6B21\u3002` : `\u521A\u624D\u65AD\u4E86 ${mins} \u5206\u949F\uFF0C\u73B0\u5728\u6062\u590D\u4E86\u3002**\u65AD\u7EBF\u671F\u95F4\u4F60\u53D1\u7684\u6D88\u606F\u6CA1\u6709\u9001\u5230**\uFF0C\u9700\u8981\u7684\u8BDD\u91CD\u53D1\u4E00\u6B21\u3002
+
+\uFF08\u5F53\u65F6\u6574\u4E2A\u7F51\u90FD\u4E0D\u901A\uFF0C\u8FDE\u300C\u65AD\u4E86\u300D\u8FD9\u5F20\u5361\u90FD\u53D1\u4E0D\u51FA\u6765\uFF0C\u6240\u4EE5\u4F60\u53EA\u770B\u5230\u8FD9\u4E00\u5F20\u3002\uFF09`;
         alerted = false;
-        for (const b of bindings.all().filter((x) => x.away)) {
+        alertDelivered = false;
+        for (const b of targets) {
           try {
-            await channel.send(b.chatId, {
-              card: linkCard(b.label, "back", `\u65AD\u4E86 ${downFor} \u79D2\uFF0C\u73B0\u5728\u6062\u590D\u4E86\u3002\u65AD\u7EBF\u671F\u95F4\u4F60\u53D1\u7684\u6D88\u606F**\u6CA1\u6709\u9001\u5230**\uFF0C\u9700\u8981\u7684\u8BDD\u91CD\u53D1\u4E00\u6B21\u3002`)
-            });
+            await channel.send(b.chatId, { card: linkCard(b.label, "back", detail) });
           } catch {
           }
         }
-        log("link.recovered", { downForSec: downFor });
+        log("link.recovered", { downForSec: downFor, notified: targets.length, warned });
       }
       downSince = 0;
       return;
@@ -137883,8 +137894,9 @@ ${loose.join("\n")}`.trim();
     if ((givenUp ? longEnough : stuckLooping) && cooledDown) void forceReconnect();
     if (alerted || down < LINK_ALERT_AFTER_MS) return;
     alerted = true;
-    log("link.down", { state });
-    for (const b of bindings.all().filter((x) => x.away)) {
+    const downTargets = groupsToNotify(downSince);
+    log("link.down", { state, notifying: downTargets.length });
+    for (const b of downTargets) {
       try {
         await channel.send(b.chatId, {
           card: linkCard(
@@ -137895,6 +137907,7 @@ ${loose.join("\n")}`.trim();
 \u8FD9\u6761\u5361\u7247\u80FD\u53D1\u51FA\u6765\u662F\u56E0\u4E3A\u53D1\u9001\u8D70\u7684\u662F\u53E6\u4E00\u6761\u901A\u9053\u3002\u6B63\u5728\u81EA\u52A8\u91CD\u8FDE\uFF1B\u4E00\u76F4\u4E0D\u6062\u590D\u7684\u8BDD\uFF0C\u5728\u7EC8\u7AEF\u8DD1 \`herdr-lark daemon --stop --force\` \u518D \`herdr-lark daemon --detach\`\u3002`
           )
         });
+        alertDelivered = true;
       } catch (err) {
         log("link.alert-failed", { key: b.key, err: String(err).slice(0, 120) });
       }
@@ -138265,7 +138278,7 @@ ${loose.join("\n")}`.trim();
     process.on(sig, () => void shutdown(sig));
   }
 }
-var INJECT_PREFIX, POLL_MS, STATUS_COOLDOWN_MS, LINK_ALERT_AFTER_MS, LINK_FORCE_RECONNECT_AFTER_MS, LINK_STUCK_AFTER_MS, INJECT_SUBMIT_WAIT_MS, TURN_SETTLE_POLLS, MIRRORED_ENOUGH, MAX_IMAGE_BYTES, MAX_FILE_BYTES;
+var INJECT_PREFIX, POLL_MS, STATUS_COOLDOWN_MS, LINK_ALERT_AFTER_MS, LINK_FORCE_RECONNECT_AFTER_MS, LINK_STUCK_AFTER_MS, LINK_NOTIFY_ACTIVE_MS, INJECT_SUBMIT_WAIT_MS, TURN_SETTLE_POLLS, MIRRORED_ENOUGH, MAX_IMAGE_BYTES, MAX_FILE_BYTES;
 var init_daemon = __esm({
   "src/daemon.ts"() {
     "use strict";
@@ -138284,6 +138297,7 @@ var init_daemon = __esm({
     LINK_ALERT_AFTER_MS = 9e4;
     LINK_FORCE_RECONNECT_AFTER_MS = 6e4;
     LINK_STUCK_AFTER_MS = 3e5;
+    LINK_NOTIFY_ACTIVE_MS = 2 * 60 * 6e4;
     INJECT_SUBMIT_WAIT_MS = 8e3;
     TURN_SETTLE_POLLS = 3;
     MIRRORED_ENOUGH = 0.6;
