@@ -228,3 +228,31 @@ export async function paneTail(paneId: string, keep = 24, maxChars = 2400): Prom
     return null;
   }
 }
+
+/** The agent's own status bar and the rules around its input: never content. */
+const SCREEN_CHROME = /^\s*(?:─{3,}\s*|\[(?:Opus|Claude|Sonnet|Haiku|Fable)[^\]]*\].*|Context\s.*|Usage\s.*|⏵⏵.*|✔ Update.*)?$/;
+
+/**
+ * What a blocked pane is showing, from the bottom up.
+ *
+ * Not {@link paneTail}: that one cuts at the input prompt `❯`, and in a picker
+ * the `❯` is the selection cursor sitting on option 1 — cutting there throws
+ * away the very question the human needs to see. Here only chrome is shaved off
+ * the bottom; everything the agent drew stays.
+ */
+export async function paneScreen(paneId: string, keep = 30, maxChars = 2400): Promise<string | null> {
+  try {
+    const { stdout } = await execFileAsync(
+      'herdr',
+      ['agent', 'read', paneId, '--source', 'visible', '--lines', '60'],
+      { timeout: 10_000, maxBuffer: 1024 * 1024 },
+    );
+    const lines = stdout.split('\n');
+    while (lines.length && SCREEN_CHROME.test(lines[lines.length - 1]!)) lines.pop();
+    const screen = lines.slice(-keep).join('\n').trim();
+    if (!screen) return null;
+    return screen.length > maxChars ? `…\n${screen.slice(-maxChars)}` : screen;
+  } catch {
+    return null;
+  }
+}

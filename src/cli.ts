@@ -44,6 +44,8 @@ const HELP = `herdr-lark — 把 herdr 里跑着的 agent 会话接到飞书
   mirror                             Claude Code 的 Stop 钩子专用：从 stdin 读钩子 JSON，
                                      把刚结束那一轮的原文同步到群（已同步过就跳过）。
                                      不要手工调用，见 examples/hooks/。
+  guard-ask                          Claude Code 的 PreToolUse 钩子专用：远程模式下拦住终端自带的
+                                     选择框，让 agent 改用 ask 推到飞书。见 examples/hooks/。
 
 退出码：0 成功 · 1 输入有问题 · 2 超时没人回答 · 3 通道故障 · 4 需要人动手
 `;
@@ -506,6 +508,45 @@ async function cmdMirror(): Promise<void> {
   }
 }
 
+/**
+ * Claude Code `PreToolUse` hook on `AskUserQuestion`: in remote mode, send the
+ * question to the phone instead.
+ *
+ * The built-in picker takes keystrokes. With the human on their phone it can
+ * be seen at best (the daemon now copies the screen into a card) but never
+ * answered — typing in the group reaches the pane as text, which the picker
+ * does not read. So while this session is away, refuse the tool and say why;
+ * the agent then asks through `herdr-lark ask`, which has real buttons.
+ *
+ * Outside remote mode, or on anything unexpected, it stays out of the way: a
+ * guard that blocks the picker for a human sitting at the keyboard is worse
+ * than no guard.
+ */
+async function cmdGuardAsk(): Promise<void> {
+  try {
+    const payload = JSON.parse(await readStdin()) as { tool_name?: string; session_id?: string };
+    if (payload.tool_name !== 'AskUserQuestion' || !payload.session_id) return;
+    const res = await request({ type: 'list' }, { timeoutMs: 3_000 });
+    if (!res.ok || res.kind !== 'list') return;
+    const mine = res.bindings.find((x) => x.key === `sess:${payload.session_id}`);
+    if (!mine?.away) return;
+    process.stdout.write(
+      `${JSON.stringify({
+        hookSpecificOutput: {
+          hookEventName: 'PreToolUse',
+          permissionDecision: 'deny',
+          permissionDecisionReason:
+            '远程模式开着，用户在手机上：终端自带的选择框他看得到也点不了——它只认键盘，群里打字答不了它。' +
+            '把同一个问题改用 `herdr-lark ask` 推到飞书（卡片带按钮），用 run_in_background 跑，等答复。' +
+            '多个问题就一个一个问，同一时刻只能挂一个。',
+        },
+      })}\n`,
+    );
+  } catch {
+    // Unknown shape, daemon down, anything: allow the picker.
+  }
+}
+
 async function cmdSendFile(args: string[]): Promise<void> {
   const c = caller();
   const root = c.root;
@@ -667,6 +708,8 @@ async function main(): Promise<void> {
       return cmdSay(args);
     case 'mirror':
       return cmdMirror();
+    case 'guard-ask':
+      return cmdGuardAsk();
     case 'send-file':
       return cmdSendFile(args);
     case 'away':

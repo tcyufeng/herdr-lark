@@ -136617,7 +136617,24 @@ ${tail.slice(-maxChars)}` : tail;
     return null;
   }
 }
-var execFileAsync, PANE_PROMPT, PANE_RULE, PANE_HINT;
+async function paneScreen(paneId, keep = 30, maxChars = 2400) {
+  try {
+    const { stdout } = await execFileAsync(
+      "herdr",
+      ["agent", "read", paneId, "--source", "visible", "--lines", "60"],
+      { timeout: 1e4, maxBuffer: 1024 * 1024 }
+    );
+    const lines = stdout.split("\n");
+    while (lines.length && SCREEN_CHROME.test(lines[lines.length - 1])) lines.pop();
+    const screen = lines.slice(-keep).join("\n").trim();
+    if (!screen) return null;
+    return screen.length > maxChars ? `\u2026
+${screen.slice(-maxChars)}` : screen;
+  } catch {
+    return null;
+  }
+}
+var execFileAsync, PANE_PROMPT, PANE_RULE, PANE_HINT, SCREEN_CHROME;
 var init_herdr = __esm({
   "src/herdr.ts"() {
     "use strict";
@@ -136625,6 +136642,7 @@ var init_herdr = __esm({
     PANE_PROMPT = /^\s*(?:❯|›)\s?/;
     PANE_RULE = /^\s*(?:─{3,}\s*)?$/;
     PANE_HINT = /^\s*(?:new task\?|✔ Update|.*\/clear to save |.*·\s*ctrl\+)/;
+    SCREEN_CHROME = /^\s*(?:─{3,}\s*|\[(?:Opus|Claude|Sonnet|Haiku|Fable)[^\]]*\].*|Context\s.*|Usage\s.*|⏵⏵.*|✔ Update.*)?$/;
   }
 });
 
@@ -137817,8 +137835,23 @@ ${loose.join("\n")}`.trim();
       lastStatusPush.set(b.key, now);
       const ranFor = ranMs ? `
 \u8DD1\u4E86 ${Math.round(ranMs / 6e4)} \u5206\u949F` : "";
-      const detail = (a.terminal_title_stripped ? `**${a.terminal_title_stripped}**
+      const title = a.terminal_title_stripped && !isTransientTitle(a.terminal_title_stripped, a.agent) ? a.terminal_title_stripped : b.task;
+      let detail = (title ? `**${title}**
 ` : "") + `\u7A97\u683C ${a.pane_id}${ranFor}`;
+      if (kind === "blocked") {
+        const screen = await paneScreen(a.pane_id);
+        if (screen) {
+          detail += `
+
+\u7EC8\u7AEF\u91CC\u6B63\u5728\u95EE\u7684\uFF1A
+
+\`\`\`
+${screen}
+\`\`\`
+
+\u8FD9\u662F\u7EC8\u7AEF\u81EA\u5E26\u7684\u9009\u62E9\u6846\uFF0C**\u5728\u7FA4\u91CC\u56DE\u590D\u7B54\u4E0D\u4E86\u5B83**\uFF0C\u5F97\u56DE\u7535\u8111\u9009\u3002`;
+        }
+      }
       try {
         await channel.send(b.chatId, { card: statusCard(b.label, kind, detail) });
         log("status.pushed", { key: b.key, kind });
@@ -138342,6 +138375,8 @@ var HELP = `herdr-lark \u2014 \u628A herdr \u91CC\u8DD1\u7740\u7684 agent \u4F1A
   mirror                             Claude Code \u7684 Stop \u94A9\u5B50\u4E13\u7528\uFF1A\u4ECE stdin \u8BFB\u94A9\u5B50 JSON\uFF0C
                                      \u628A\u521A\u7ED3\u675F\u90A3\u4E00\u8F6E\u7684\u539F\u6587\u540C\u6B65\u5230\u7FA4\uFF08\u5DF2\u540C\u6B65\u8FC7\u5C31\u8DF3\u8FC7\uFF09\u3002
                                      \u4E0D\u8981\u624B\u5DE5\u8C03\u7528\uFF0C\u89C1 examples/hooks/\u3002
+  guard-ask                          Claude Code \u7684 PreToolUse \u94A9\u5B50\u4E13\u7528\uFF1A\u8FDC\u7A0B\u6A21\u5F0F\u4E0B\u62E6\u4F4F\u7EC8\u7AEF\u81EA\u5E26\u7684
+                                     \u9009\u62E9\u6846\uFF0C\u8BA9 agent \u6539\u7528 ask \u63A8\u5230\u98DE\u4E66\u3002\u89C1 examples/hooks/\u3002
 
 \u9000\u51FA\u7801\uFF1A0 \u6210\u529F \xB7 1 \u8F93\u5165\u6709\u95EE\u9898 \xB7 2 \u8D85\u65F6\u6CA1\u4EBA\u56DE\u7B54 \xB7 3 \u901A\u9053\u6545\u969C \xB7 4 \u9700\u8981\u4EBA\u52A8\u624B
 `;
@@ -138729,6 +138764,27 @@ async function cmdMirror() {
   } catch {
   }
 }
+async function cmdGuardAsk() {
+  try {
+    const payload = JSON.parse(await readStdin());
+    if (payload.tool_name !== "AskUserQuestion" || !payload.session_id) return;
+    const res = await request({ type: "list" }, { timeoutMs: 3e3 });
+    if (!res.ok || res.kind !== "list") return;
+    const mine = res.bindings.find((x) => x.key === `sess:${payload.session_id}`);
+    if (!mine?.away) return;
+    process.stdout.write(
+      `${JSON.stringify({
+        hookSpecificOutput: {
+          hookEventName: "PreToolUse",
+          permissionDecision: "deny",
+          permissionDecisionReason: "\u8FDC\u7A0B\u6A21\u5F0F\u5F00\u7740\uFF0C\u7528\u6237\u5728\u624B\u673A\u4E0A\uFF1A\u7EC8\u7AEF\u81EA\u5E26\u7684\u9009\u62E9\u6846\u4ED6\u770B\u5F97\u5230\u4E5F\u70B9\u4E0D\u4E86\u2014\u2014\u5B83\u53EA\u8BA4\u952E\u76D8\uFF0C\u7FA4\u91CC\u6253\u5B57\u7B54\u4E0D\u4E86\u5B83\u3002\u628A\u540C\u4E00\u4E2A\u95EE\u9898\u6539\u7528 `herdr-lark ask` \u63A8\u5230\u98DE\u4E66\uFF08\u5361\u7247\u5E26\u6309\u94AE\uFF09\uFF0C\u7528 run_in_background \u8DD1\uFF0C\u7B49\u7B54\u590D\u3002\u591A\u4E2A\u95EE\u9898\u5C31\u4E00\u4E2A\u4E00\u4E2A\u95EE\uFF0C\u540C\u4E00\u65F6\u523B\u53EA\u80FD\u6302\u4E00\u4E2A\u3002"
+        }
+      })}
+`
+    );
+  } catch {
+  }
+}
 async function cmdSendFile(args) {
   const c = caller();
   const root = c.root;
@@ -138871,6 +138927,8 @@ async function main() {
       return cmdSay(args);
     case "mirror":
       return cmdMirror();
+    case "guard-ask":
+      return cmdGuardAsk();
     case "send-file":
       return cmdSendFile(args);
     case "away":

@@ -7,7 +7,7 @@ import { createLarkChannel, type CardActionEvent, type LarkChannel, type Normali
 import { BindingStore, type Binding } from './bindings.js';
 import { askCard, linkCard, missedMirrorCard, notifyCard, receiptCard, sayCard, statusCard, type TurnState } from './cards.js';
 import { resolveCreds } from './creds.js';
-import { agentList, findPaneForProject, findPaneForSession, paneStarted, paneTail, promptPane, sendKeys } from './herdr.js';
+import { agentList, findPaneForProject, findPaneForSession, paneScreen, paneStarted, paneTail, promptPane, sendKeys } from './herdr.js';
 import { findTranscript, lastTurn } from './transcript.js';
 import { serve, type Caller, type Request, type Response } from './ipc.js';
 import { ensureHomeDir, homeDir, logPath, pidPath, projectLabel, sockPath } from './paths.js';
@@ -680,8 +680,26 @@ export async function runDaemon(): Promise<void> {
       if (now - (lastStatusPush.get(b.key) ?? 0) < STATUS_COOLDOWN_MS) continue;
       lastStatusPush.set(b.key, now);
       const ranFor = ranMs ? `\n跑了 ${Math.round(ranMs / 60_000)} 分钟` : '';
-      const detail =
-        (a.terminal_title_stripped ? `**${a.terminal_title_stripped}**\n` : '') + `窗格 ${a.pane_id}${ranFor}`;
+      // The title is the task, unless the agent is mid-prompt and showing its
+      // product name — then the binding's own record of the task is better.
+      const title = a.terminal_title_stripped && !isTransientTitle(a.terminal_title_stripped, a.agent)
+        ? a.terminal_title_stripped
+        : b.task;
+      let detail = (title ? `**${title}**\n` : '') + `窗格 ${a.pane_id}${ranFor}`;
+      // "Waiting for input" with nothing else is a card the human cannot act
+      // on. A session blocked on its own picker — Claude Code's built-in
+      // question tool, a permission prompt — has the question on screen, so
+      // carry the screen. Replying in the group cannot answer it (the prompt
+      // takes keystrokes, not text), and the card says so rather than letting
+      // the human type into a void.
+      if (kind === 'blocked') {
+        const screen = await paneScreen(a.pane_id);
+        if (screen) {
+          detail +=
+            `\n\n终端里正在问的：\n\n\`\`\`\n${screen}\n\`\`\`\n\n` +
+            '这是终端自带的选择框，**在群里回复答不了它**，得回电脑选。';
+        }
+      }
       try {
         await channel.send(b.chatId, { card: statusCard(b.label, kind, detail) });
         log('status.pushed', { key: b.key, kind });

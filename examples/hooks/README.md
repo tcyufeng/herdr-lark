@@ -41,6 +41,35 @@ list):
 - **Fail loudly.** It exits 0 whatever happens. A hook that errors on every
   unrelated session in the machine is worse than no hook.
 
+## Keeping questions off the terminal picker
+
+Claude Code has a built-in multiple-choice picker (`AskUserQuestion`). The
+remote-mode rule tells the agent to ask through `herdr-lark ask` instead, and
+agents do not always listen. When one reaches for the picker while you are on
+your phone, the daemon sees only that the pane is blocked. It copies the screen
+into a 🔔 card so you can at least read the question, but you cannot answer it
+from there: the picker takes keystrokes, and a reply in the group arrives as text.
+
+A `PreToolUse` hook stops the picker before it opens. In remote mode it refuses
+the tool and tells the agent to ask through `herdr-lark ask`, which puts real
+buttons on your phone. Outside remote mode it does nothing, so the picker works
+as usual when you are at the keyboard.
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "AskUserQuestion",
+        "hooks": [{ "type": "command", "command": "herdr-lark guard-ask", "timeout": 10 }]
+      }
+    ]
+  }
+}
+```
+
+Like the Stop hook, it takes effect in sessions started after it is added.
+
 ## Other agent CLIs
 
 Nothing here is required. The hook is a Claude Code feature, and the skill does
