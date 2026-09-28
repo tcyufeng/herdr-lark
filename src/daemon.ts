@@ -8,7 +8,7 @@ import { BindingStore, type Binding } from './bindings.js';
 import { askCard, linkCard, missedMirrorCard, notifyCard, receiptCard, sayCard, statusCard, type TurnState } from './cards.js';
 import { resolveCreds } from './creds.js';
 import { agentList, findPaneForProject, findPaneForSession, paneScreen, paneStarted, paneTail, promptPane, sendKeys } from './herdr.js';
-import { findTranscript, lastTurn } from './transcript.js';
+import { findTranscript, lastTurn, wasInterrupted } from './transcript.js';
 import { serve, type Caller, type Request, type Response } from './ipc.js';
 import { ensureHomeDir, homeDir, logPath, pidPath, projectLabel, sockPath } from './paths.js';
 import { validateAsk, validateNotify, ValidationError, type AskPayload } from './validate.js';
@@ -339,9 +339,23 @@ export async function runDaemon(): Promise<void> {
     // reading it needs no hook installed — which matters, because the hook only
     // reaches sessions that started after it was configured.
     const path = findTranscript(b.sessionId);
+    // Stopped with Esc at the keyboard: the human is right there and ended the
+    // turn themselves. The Stop hook already stays quiet on an interrupt; this
+    // is the same courtesy for the backstop. The terminal check covers agents
+    // with no transcript to read.
+    if (path && wasInterrupted(path)) {
+      missAlerted.set(b.key, injected);
+      log('mirror.skipped', { key: b.key, why: 'interrupted at the keyboard' });
+      return;
+    }
     const turn = path ? lastTurn(path) : null;
     const source: 'transcript' | 'terminal' = turn ? 'transcript' : 'terminal';
     const tail = turn ? turn.text : await paneTail(paneId);
+    if (!turn && tail && /Interrupted · What should Claude do instead/.test(tail)) {
+      missAlerted.set(b.key, injected);
+      log('mirror.skipped', { key: b.key, why: 'interrupted at the keyboard (screen)' });
+      return;
+    }
     // "Something went out" is not the test. An agent that mirrored a one-line
     // correction and then wrote a page of tables satisfies it while the human
     // sees almost nothing — observed: 78 characters sent for a turn that filled

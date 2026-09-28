@@ -136707,6 +136707,24 @@ function findTranscript(sessionId) {
   }
   return null;
 }
+function wasInterrupted(transcriptPath) {
+  const raw = readTail(transcriptPath);
+  if (raw === null) return false;
+  const lines = raw.split("\n");
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    let line;
+    try {
+      line = JSON.parse(lines[i]);
+    } catch {
+      continue;
+    }
+    if (!isTurnStart(line)) continue;
+    const c = line.message?.content;
+    const text = typeof c === "string" ? c : blocks(line).find((b) => b.type === "text")?.text ?? "";
+    return text.trimStart().startsWith("[Request interrupted by user");
+  }
+  return false;
+}
 var blocks, isTurnStart, TAIL_BYTES;
 var init_transcript = __esm({
   "src/transcript.ts"() {
@@ -137608,9 +137626,19 @@ async function runDaemon() {
     if (!injected) return;
     if (missAlerted.get(b.key) === injected) return;
     const path2 = findTranscript(b.sessionId);
+    if (path2 && wasInterrupted(path2)) {
+      missAlerted.set(b.key, injected);
+      log("mirror.skipped", { key: b.key, why: "interrupted at the keyboard" });
+      return;
+    }
     const turn = path2 ? lastTurn(path2) : null;
     const source = turn ? "transcript" : "terminal";
     const tail = turn ? turn.text : await paneTail(paneId);
+    if (!turn && tail && /Interrupted · What should Claude do instead/.test(tail)) {
+      missAlerted.set(b.key, injected);
+      log("mirror.skipped", { key: b.key, why: "interrupted at the keyboard (screen)" });
+      return;
+    }
     const tailChars = tail ? tail.replace(/\s+/g, " ").trim().length : 0;
     const mirrored = (recentSays.get(b.key) ?? []).filter((r) => r.at >= injected).reduce((sum, r) => sum + r.chars, 0);
     if (tailChars && mirrored >= tailChars * MIRRORED_ENOUGH) return;

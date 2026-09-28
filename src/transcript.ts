@@ -132,3 +132,32 @@ export function findTranscript(sessionId: string | null): string | null {
   }
   return null;
 }
+
+/**
+ * Did the human stop the latest turn from the keyboard?
+ *
+ * Esc in Claude Code writes `[Request interrupted by user]` (or `… for tool
+ * use`) into the transcript as a user line. If that is the newest thing the
+ * human said, they are sitting at the terminal and just watched the turn end —
+ * a card on their phone saying "it did not mirror its reply" is noise, and the
+ * turn it points at was the human's own doing.
+ */
+export function wasInterrupted(transcriptPath: string): boolean {
+  const raw = readTail(transcriptPath);
+  if (raw === null) return false;
+  const lines = raw.split('\n');
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    let line: Line;
+    try {
+      line = JSON.parse(lines[i]!) as Line;
+    } catch {
+      continue;
+    }
+    if (!isTurnStart(line)) continue;
+    const c = line.message?.content;
+    const text =
+      typeof c === 'string' ? c : blocks(line).find((b) => b.type === 'text')?.text ?? '';
+    return text.trimStart().startsWith('[Request interrupted by user');
+  }
+  return false;
+}
