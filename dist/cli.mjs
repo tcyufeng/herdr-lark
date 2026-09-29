@@ -137451,6 +137451,13 @@ function isTransientTitle(title, agent) {
   if (agent && (t2 === agent.toLowerCase() || t2.startsWith(`${agent.toLowerCase()} `))) return true;
   return /^claude\s+-/.test(t2);
 }
+function contentWeight(text) {
+  let n = 0;
+  for (const ch of text.replace(/\s+/g, "")) {
+    n += /[\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff\uac00-\ud7af]/.test(ch) ? 3 : 1;
+  }
+  return n;
+}
 function log(event, detail = {}) {
   const line = `${(/* @__PURE__ */ new Date()).toISOString()} ${event} ${JSON.stringify(detail)}
 `;
@@ -137544,7 +137551,7 @@ async function runDaemon() {
       }
       markOutbound(b.key);
       const seen = recentSays.get(b.key) ?? [];
-      seen.push({ at: Date.now(), chars: text.replace(/\s+/g, " ").trim().length });
+      seen.push({ at: Date.now(), chars: contentWeight(text) });
       recentSays.set(b.key, seen.slice(-10));
       log("say.sent", { key: b.key, chars: text.length });
       return { ok: true, kind: "ack" };
@@ -137639,7 +137646,7 @@ async function runDaemon() {
       log("mirror.skipped", { key: b.key, why: "interrupted at the keyboard (screen)" });
       return;
     }
-    const tailChars = tail ? tail.replace(/\s+/g, " ").trim().length : 0;
+    const tailChars = tail ? contentWeight(tail) : 0;
     const mirrored = (recentSays.get(b.key) ?? []).filter((r) => r.at >= injected).reduce((sum, r) => sum + r.chars, 0);
     if (tailChars && mirrored >= tailChars * MIRRORED_ENOUGH) return;
     missAlerted.set(b.key, injected);
@@ -138239,8 +138246,7 @@ ${screen}
           if (!b.away) return { ok: true, kind: "ack" };
           const text = req.text.trim();
           if (!text) return { ok: true, kind: "ack" };
-          const norm = (v) => v.replace(/\s+/g, " ").trim();
-          const turnChars = norm(text).length;
+          const turnChars = contentWeight(text);
           const mirrored = (recentSays.get(b.key) ?? []).filter((r) => r.at >= req.turnStartedAt).reduce((sum, r) => sum + r.chars, 0);
           if (mirrored >= turnChars * MIRRORED_ENOUGH) {
             log("mirror.skipped", { key: b.key, mirrored, turnChars });
@@ -138361,7 +138367,7 @@ var init_daemon = __esm({
     LINK_NOTIFY_ACTIVE_MS = 2 * 60 * 6e4;
     INJECT_SUBMIT_WAIT_MS = 8e3;
     TURN_SETTLE_POLLS = 3;
-    MIRRORED_ENOUGH = 0.6;
+    MIRRORED_ENOUGH = 0.4;
     MAX_IMAGE_BYTES = 10 * 1024 * 1024;
     MAX_FILE_BYTES = 30 * 1024 * 1024;
   }

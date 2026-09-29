@@ -59,12 +59,34 @@ function isTransientTitle(title: string, agent?: string): boolean {
 
 const TURN_SETTLE_POLLS = 3;
 /**
- * How much of a turn's length must already have reached the group for the
- * Stop hook to consider it mirrored and stay quiet. Below 1 because agents
- * reword rather than copy; well above 0 so a one-line progress note does not
- * pass for the answer.
+ * How much of a turn's weight must already have reached the group for the
+ * Stop hook to consider it mirrored and stay quiet. It separates a one-line
+ * progress note (well under 0.15 of a turn) from the actual reply — which,
+ * even translated and trimmed, lands above 0.5: the turn text also carries the
+ * narration between tool calls ("Checking whether…"), and a mirror of the
+ * reply rightly leaves that out. 0.6 was measured too tight on exactly that.
  */
-const MIRRORED_ENOUGH = 0.6;
+const MIRRORED_ENOUGH = 0.4;
+
+/**
+ * Length that means the same across scripts, for comparing a reply against
+ * the card that mirrored it.
+ *
+ * Raw character counts do not: one idea takes two to three times as many
+ * characters in English as in Chinese. Observed: an agent answered in English
+ * in the terminal (1244 chars) and mirrored a Chinese version (536 chars);
+ * 43% fell short of the threshold, the hook judged the turn unmirrored and
+ * sent the English original after the Chinese one — every reply twice.
+ * Whitespace is dropped because English spends a character on every word gap
+ * and Chinese spends none.
+ */
+function contentWeight(text: string): number {
+  let n = 0;
+  for (const ch of text.replace(/\s+/g, '')) {
+    n += /[\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff\uac00-\ud7af]/.test(ch) ? 3 : 1;
+  }
+  return n;
+}
 
 /** The log records ids and state transitions only — never message bodies. */
 function log(event: string, detail: Record<string, unknown> = {}): void {
@@ -210,7 +232,7 @@ export async function runDaemon(): Promise<void> {
       }
       markOutbound(b.key);
       const seen = recentSays.get(b.key) ?? [];
-      seen.push({ at: Date.now(), chars: text.replace(/\s+/g, ' ').trim().length });
+      seen.push({ at: Date.now(), chars: contentWeight(text) });
       recentSays.set(b.key, seen.slice(-10));
       log('say.sent', { key: b.key, chars: text.length });
       return { ok: true, kind: 'ack' };
@@ -360,7 +382,7 @@ export async function runDaemon(): Promise<void> {
     // correction and then wrote a page of tables satisfies it while the human
     // sees almost nothing — observed: 78 characters sent for a turn that filled
     // the terminal. Weigh what reached the group against what the pane holds.
-    const tailChars = tail ? tail.replace(/\s+/g, ' ').trim().length : 0;
+    const tailChars = tail ? contentWeight(tail) : 0;
     const mirrored = (recentSays.get(b.key) ?? [])
       .filter((r) => r.at >= injected)
       .reduce((sum, r) => sum + r.chars, 0);
@@ -1164,8 +1186,7 @@ export async function runDaemon(): Promise<void> {
           //
           // Volume survives rewording. A turn whose cards already carry most of
           // its length was mirrored; one that only produced a short note was not.
-          const norm = (v: string): string => v.replace(/\s+/g, ' ').trim();
-          const turnChars = norm(text).length;
+          const turnChars = contentWeight(text);
           const mirrored = (recentSays.get(b.key) ?? [])
             .filter((r) => r.at >= req.turnStartedAt)
             .reduce((sum, r) => sum + r.chars, 0);
