@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import type { Server } from 'node:net';
 import { createLarkChannel, type CardActionEvent, type LarkChannel, type NormalizedMessage } from '@larksuite/channel';
 import { BindingStore, type Binding } from './bindings.js';
-import { askCard, linkCard, missedMirrorCard, notifyCard, receiptCard, sayCard, statusCard, type TurnState } from './cards.js';
+import { askCard, linkCard, missedMirrorCard, notifyCard, PERMIT_ALLOW, PERMIT_DENY, permitCard, receiptCard, sayCard, statusCard, type AskState, type TurnState } from './cards.js';
 import { resolveCreds } from './creds.js';
 import { agentList, findPaneForProject, findPaneForSession, paneScreen, paneStarted, paneTail, promptPane, sendKeys } from './herdr.js';
 import { findTranscript, lastTurn, wasInterrupted } from './transcript.js';
@@ -156,6 +156,18 @@ interface Pending {
   messageId: string;
   label: string;
   payload: AskPayload;
+  /** Draws this question's card in a given state: an ask card, or a permission card. */
+  render: (state: AskState, reply?: string) => object;
+  /**
+   * Permission cards only: the pane whose prompt this is. That prompt is also
+   * on screen in the terminal and can be answered there, and Claude Code does
+   * not stop the waiting hook when it is — so the pane is watched instead.
+   */
+  watchPane?: string | null;
+  /** Whether that pane has been seen blocked on the prompt yet. */
+  seenBlocked?: boolean;
+  /** Consecutive polls since, with the pane no longer blocked. */
+  clearPolls?: number;
   settle: (r: Response) => void;
   timer: NodeJS.Timeout;
   done: boolean;
@@ -290,7 +302,7 @@ export async function runDaemon(): Promise<void> {
     try {
       await channel.updateCard(
         p.messageId,
-        askCard({ payload: p.payload, projectLabel: p.label, reqId: p.reqId, state: 'answered', reply }),
+        p.render('answered', reply),
       );
     } catch (err) {
       log('ask.update-failed', { reqId: p.reqId, err: String(err) });
@@ -307,7 +319,7 @@ export async function runDaemon(): Promise<void> {
     try {
       await channel.updateCard(
         p.messageId,
-        askCard({ payload: p.payload, projectLabel: p.label, reqId: p.reqId, state }),
+        p.render(state),
       );
     } catch (err) {
       log('ask.update-failed', { reqId: p.reqId, err: String(err) });
@@ -596,7 +608,11 @@ export async function runDaemon(): Promise<void> {
     text = text.replace(/!?\[[^\]]*\]\((?:img_v3|file_v3)[^)]*\)/g, '（有个附件没能下载）');
     if (loose.length) text = `${text}\n${loose.join('\n')}`.trim();
     if (!text) return;
-    const p = pendingFor(b.root);
+    // Pending questions are filed under the session key, not the directory —
+    // looking them up by root never matched once bindings went per-session, so
+    // a typed answer was injected into the pane as a fresh message while the
+    // card went on waiting for a tap.
+    const p = pendingFor(b.key);
     if (p) {
       await answer(p, text, 'text');
       return;
@@ -623,13 +639,7 @@ export async function runDaemon(): Promise<void> {
     // Build the closed card before answering, so it can ride back on this very
     // callback: Feishu swaps the card in the same round trip and the buttons
     // are gone before a second tap is possible.
-    const closed = askCard({
-      payload: p.payload,
-      projectLabel: p.label,
-      reqId: p.reqId,
-      state: 'answered',
-      reply: opt.label,
-    });
+    const closed = p.render('answered', opt.label);
     await answer(p, opt.label, 'button');
     return {
       toast: { type: 'success', content: '已回复' },
@@ -653,6 +663,27 @@ export async function runDaemon(): Promise<void> {
     const all = bindings.all();
     if (!all.length) return;
     const agents = await agentList();
+
+    // A permission prompt answered in the terminal leaves its card live on the
+    // phone, the hook waiting, and the session's one question slot taken —
+    // so every later ask from that session is refused. Once the pane has been
+    // seen on the prompt and then off it for two polls, the terminal has
+    // answered: close the card and let the hook exit without a decision.
+    for (const p of pendings.values()) {
+      if (p.done || !p.watchPane) continue;
+      const status = agents.find((a) => a.pane_id === p.watchPane)?.agent_status;
+      if (status === 'blocked') {
+        p.seenBlocked = true;
+        p.clearPolls = 0;
+        continue;
+      }
+      if (!p.seenBlocked) continue;
+      p.clearPolls = (p.clearPolls ?? 0) + 1;
+      if (p.clearPolls >= 2) {
+        log('permit.answered-in-terminal', { reqId: p.reqId });
+        void closeWithout(p, 'cancelled', { ok: false, code: 3, message: '已在终端处理' });
+      }
+    }
 
     // Keep every group's name current, whether or not remote mode is on: the
     // human reads the chat list even while sitting at the keyboard.
@@ -1258,6 +1289,7 @@ export async function runDaemon(): Promise<void> {
               messageId,
               label: b.label,
               payload,
+              render: (state, reply) => askCard({ payload, projectLabel: b.label, reqId, state, reply }),
               settle: resolve,
               done: false,
               timer: setTimeout(() => {
@@ -1280,6 +1312,67 @@ export async function runDaemon(): Promise<void> {
                 });
             });
             ctx.note(`已发到飞书群，等你回答（最长 ${Math.round(req.timeoutMs / 1000)} 秒）`);
+          });
+        }
+
+        // Claude Code's own permission prompt, raised by the PermissionRequest
+        // hook. The agent is already stopped waiting on the harness, so this is
+        // the only party that can carry the question to the phone. Anything
+        // short of a clear yes/no from the human returns no decision, and the
+        // ordinary terminal prompt carries on as if the hook were not there.
+        case 'permit': {
+          const b = bindings.get(req.caller.key);
+          if (!b || !b.away) return { ok: true, kind: 'ack' };
+          if (pendingFor(b.key)) return { ok: false, code: 4, message: '这个会话已经有一个问题挂在手机上了' };
+          const reqId = randomUUID().replace(/-/g, '').slice(0, 16);
+          const permitReq = req.req;
+          const render = (state: AskState, reply?: string): object =>
+            permitCard({ projectLabel: b.label, reqId, req: permitReq, state, reply });
+          let messageId: string;
+          try {
+            messageId = (await channel.send(b.chatId, { card: render('pending') })).messageId;
+          } catch (err) {
+            return { ok: false, code: 3, message: `发送失败：${err instanceof Error ? err.message : String(err)}` };
+          }
+          markOutbound(b.key);
+          log('permit.sent', { reqId, key: b.key, tool: permitReq.tool });
+          return await new Promise<Response>((resolve) => {
+            const p: Pending = {
+              reqId,
+              key: b.key,
+              root: b.root,
+              chatId: b.chatId,
+              messageId,
+              label: b.label,
+              // Only `options` is read off this — by the button callback, to
+              // turn an option id back into the label the CLI maps to a decision.
+              payload: {
+                title: permitReq.tool,
+                doing: '',
+                description: '',
+                blocker: '',
+                options: [
+                  { id: 'allow', label: PERMIT_ALLOW, consequence: '' },
+                  { id: 'deny', label: PERMIT_DENY, consequence: '' },
+                ],
+                recommend: '',
+                reasoning: '',
+                question: '',
+              },
+              render,
+              watchPane: req.caller.paneId,
+              settle: resolve,
+              done: false,
+              timer: setTimeout(() => {
+                void closeWithout(p, 'timedout', { ok: false, code: 2, message: '没等到批准' });
+              }, req.timeoutMs),
+            };
+            pendings.set(reqId, p);
+            // The hook timing out or the human answering in the terminal both
+            // end this process; close the card rather than leave live buttons.
+            ctx.onClose(() => {
+              if (!p.done) void closeWithout(p, 'cancelled', { ok: false, code: 3, message: '确认方断开了' });
+            });
           });
         }
 

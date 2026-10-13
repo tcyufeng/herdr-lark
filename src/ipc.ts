@@ -26,6 +26,7 @@ export type Request =
   | { type: 'notify'; caller: Caller; payload: unknown }
   | { type: 'say'; caller: Caller; text: string; title?: string }
   | { type: 'mirror'; caller: Caller; text: string; turnStartedAt: number }
+  | { type: 'permit'; caller: Caller; req: { tool: string; summary?: string; detail: string }; timeoutMs: number }
   | { type: 'sendFile'; caller: Caller; path: string; caption?: string };
 
 export interface DaemonStatus {

@@ -41,6 +41,37 @@ list):
 - **Fail loudly.** It exits 0 whatever happens. A hook that errors on every
   unrelated session in the machine is worse than no hook.
 
+## Approving tool calls from the phone
+
+When Claude Code needs permission to run a tool, the agent is already stopped
+waiting on the harness — it cannot ask through `herdr-lark ask`. A
+`PermissionRequest` hook can: in remote mode it puts the request on your phone
+as a card with **允许 / 拒绝** and the call itself shown verbatim (the command,
+the file path, the URL), then answers the prompt with what you tap.
+
+- Typing in the group instead of tapping denies the call and passes your words
+  to the agent as the reason — "别删，改成移到 /tmp" is an instruction, not
+  just a no.
+- The prompt stays on screen in the terminal too. Answer it there and the card
+  closes itself within about ten seconds, marked as handled in the terminal.
+- Outside remote mode it returns at once with no decision, so the terminal
+  prompt appears exactly as it would without the hook.
+- Deny and ask rules in your settings still apply: a tap cannot allow what a
+  deny rule forbids.
+
+```json
+{
+  "hooks": {
+    "PermissionRequest": [
+      { "hooks": [{ "type": "command", "command": "herdr-lark permit", "timeout": 3600 }] }
+    ]
+  }
+}
+```
+
+The timeout is long on purpose: the card waits up to 55 minutes for you. A
+shorter timeout ends the wait early and leaves the decision to the terminal.
+
 ## Keeping questions off the terminal picker
 
 Claude Code has a built-in multiple-choice picker (`AskUserQuestion`). The

@@ -137304,6 +137304,38 @@ ${optionLines(p.options, p.recommend, lang)}`),
     elements
   );
 }
+function permitCard(ctx) {
+  const { req, state, reply } = ctx;
+  const outcome = state === "answered" ? reply === PERMIT_ALLOW ? "\u5DF2\u5141\u8BB8" : reply === PERMIT_DENY ? "\u5DF2\u62D2\u7EDD" : "\u5DF2\u62D2\u7EDD\uFF0C\u5E76\u628A\u4F60\u7684\u8BDD\u8F6C\u7ED9\u4E86\u5B83" : state === "timedout" ? "\u5DF2\u8D85\u65F6" : state === "cancelled" ? "\u5DF2\u5728\u7EC8\u7AEF\u5904\u7406" : "";
+  const elements = [];
+  if (req.summary) elements.push(md(req.summary));
+  elements.push(md(`\`\`\`
+${req.detail}
+\`\`\``));
+  if (state === "pending") {
+    elements.push(
+      { tag: "button", text: { tag: "plain_text", content: PERMIT_ALLOW }, type: "primary", value: { reqId: ctx.reqId, optionId: "allow" } },
+      { tag: "button", text: { tag: "plain_text", content: PERMIT_DENY }, type: "default", value: { reqId: ctx.reqId, optionId: "deny" } },
+      note("\u60F3\u62D2\u7EDD\u5E76\u544A\u8BC9\u5B83\u8BE5\u600E\u4E48\u505A\uFF0C\u76F4\u63A5\u5728\u7FA4\u91CC\u6253\u5B57\uFF0C\u90A3\u53E5\u8BDD\u4F1A\u539F\u6837\u8F6C\u7ED9\u5B83\u3002")
+    );
+  } else {
+    elements.push(
+      hr(),
+      state === "answered" && reply ? md(reply === PERMIT_ALLOW || reply === PERMIT_DENY ? `\u2705 **${reply}**` : `\u2705 **\u62D2\u7EDD**\uFF0C\u5E76\u8F6C\u544A\u5B83\uFF1A${reply}`) : note(
+        state === "timedout" ? "\u231B \u6CA1\u7B49\u5230\u4F60\uFF0C\u7EC8\u7AEF\u91CC\u7684\u786E\u8BA4\u6846\u8FD8\u5728\u7B49\u3002" : "\u26A0\uFE0F \u8FD9\u4E2A\u786E\u8BA4\u5DF2\u7ECF\u5728\u7EC8\u7AEF\u91CC\u5904\u7406\u6389\u4E86\u3002"
+      )
+    );
+  }
+  const head = state === "pending" ? { template: "orange", icon: "\u{1F510}" } : HEADER[state];
+  return card(
+    {
+      icon: head.icon,
+      title: `[${ctx.projectLabel}] \u8981\u4F60\u6279\u51C6\uFF1A${req.tool}${outcome ? ` \xB7 ${outcome}` : ""}`,
+      template: head.template
+    },
+    elements
+  );
+}
 function sayCard(body, projectLabel2, title, state = "running") {
   return card({ icon: "\u{1F4AC}", title: title?.trim() || `[${projectLabel2}]`, template: "turquoise" }, [
     md(body),
@@ -137357,7 +137389,7 @@ function statusCard(projectLabel2, status, detail, lang = "zh") {
     [md(detail)]
   );
 }
-var TEXTS, t, md, hr, note, HEADER, TURN_FOOTER;
+var TEXTS, t, md, hr, note, HEADER, PERMIT_ALLOW, PERMIT_DENY, TURN_FOOTER;
 var init_cards = __esm({
   "src/cards.ts"() {
     "use strict";
@@ -137425,6 +137457,8 @@ var init_cards = __esm({
       timedout: { template: "grey", icon: "\u231B" },
       cancelled: { template: "grey", icon: "\u26A0\uFE0F" }
     };
+    PERMIT_ALLOW = "\u5141\u8BB8";
+    PERMIT_DENY = "\u62D2\u7EDD";
     TURN_FOOTER = {
       running: "<font color='grey'>\u23F3 \u8FD8\u5728\u8DD1\uFF0C\u8FD9\u6761\u4E0D\u4E00\u5B9A\u662F\u7ED3\u8BBA</font>",
       done: "<font color='green'>\u2705 \u8BF4\u5B8C\u4E86\uFF0C\u8F6E\u5230\u4F60</font>",
@@ -137589,7 +137623,7 @@ async function runDaemon() {
     try {
       await channel.updateCard(
         p.messageId,
-        askCard({ payload: p.payload, projectLabel: p.label, reqId: p.reqId, state: "answered", reply })
+        p.render("answered", reply)
       );
     } catch (err) {
       log("ask.update-failed", { reqId: p.reqId, err: String(err) });
@@ -137605,7 +137639,7 @@ async function runDaemon() {
     try {
       await channel.updateCard(
         p.messageId,
-        askCard({ payload: p.payload, projectLabel: p.label, reqId: p.reqId, state })
+        p.render(state)
       );
     } catch (err) {
       log("ask.update-failed", { reqId: p.reqId, err: String(err) });
@@ -137788,7 +137822,7 @@ ${why}` : why;
     if (loose.length) text = `${text}
 ${loose.join("\n")}`.trim();
     if (!text) return;
-    const p = pendingFor(b.root);
+    const p = pendingFor(b.key);
     if (p) {
       await answer(p, text, "text");
       return;
@@ -137809,13 +137843,7 @@ ${loose.join("\n")}`.trim();
     }
     const opt2 = p.payload.options.find((o) => o.id === value.optionId);
     if (!opt2) return { toast: { type: "error", content: "\u8FD9\u4E2A\u9009\u9879\u5BF9\u4E0D\u4E0A\uFF0C\u518D\u8BD5\u4E00\u6B21" } };
-    const closed = askCard({
-      payload: p.payload,
-      projectLabel: p.label,
-      reqId: p.reqId,
-      state: "answered",
-      reply: opt2.label
-    });
+    const closed = p.render("answered", opt2.label);
     await answer(p, opt2.label, "button");
     return {
       toast: { type: "success", content: "\u5DF2\u56DE\u590D" },
@@ -137832,6 +137860,21 @@ ${loose.join("\n")}`.trim();
     const all = bindings.all();
     if (!all.length) return;
     const agents = await agentList();
+    for (const p of pendings.values()) {
+      if (p.done || !p.watchPane) continue;
+      const status = agents.find((a) => a.pane_id === p.watchPane)?.agent_status;
+      if (status === "blocked") {
+        p.seenBlocked = true;
+        p.clearPolls = 0;
+        continue;
+      }
+      if (!p.seenBlocked) continue;
+      p.clearPolls = (p.clearPolls ?? 0) + 1;
+      if (p.clearPolls >= 2) {
+        log("permit.answered-in-terminal", { reqId: p.reqId });
+        void closeWithout(p, "cancelled", { ok: false, code: 3, message: "\u5DF2\u5728\u7EC8\u7AEF\u5904\u7406" });
+      }
+    }
     for (const b of all) {
       const a = b.sessionId ? agents.find((x) => x.agent_session?.value === b.sessionId) : void 0;
       if (a && a.pane_id !== b.paneId) bindings.touch(b.key, { paneId: a.pane_id });
@@ -138309,6 +138352,7 @@ ${screen}
               messageId,
               label: b.label,
               payload,
+              render: (state, reply) => askCard({ payload, projectLabel: b.label, reqId, state, reply }),
               settle: resolve2,
               done: false,
               timer: setTimeout(() => {
@@ -138329,6 +138373,63 @@ ${screen}
                 });
             });
             ctx.note(`\u5DF2\u53D1\u5230\u98DE\u4E66\u7FA4\uFF0C\u7B49\u4F60\u56DE\u7B54\uFF08\u6700\u957F ${Math.round(req.timeoutMs / 1e3)} \u79D2\uFF09`);
+          });
+        }
+        // Claude Code's own permission prompt, raised by the PermissionRequest
+        // hook. The agent is already stopped waiting on the harness, so this is
+        // the only party that can carry the question to the phone. Anything
+        // short of a clear yes/no from the human returns no decision, and the
+        // ordinary terminal prompt carries on as if the hook were not there.
+        case "permit": {
+          const b = bindings.get(req.caller.key);
+          if (!b || !b.away) return { ok: true, kind: "ack" };
+          if (pendingFor(b.key)) return { ok: false, code: 4, message: "\u8FD9\u4E2A\u4F1A\u8BDD\u5DF2\u7ECF\u6709\u4E00\u4E2A\u95EE\u9898\u6302\u5728\u624B\u673A\u4E0A\u4E86" };
+          const reqId = randomUUID2().replace(/-/g, "").slice(0, 16);
+          const permitReq = req.req;
+          const render = (state, reply) => permitCard({ projectLabel: b.label, reqId, req: permitReq, state, reply });
+          let messageId;
+          try {
+            messageId = (await channel.send(b.chatId, { card: render("pending") })).messageId;
+          } catch (err) {
+            return { ok: false, code: 3, message: `\u53D1\u9001\u5931\u8D25\uFF1A${err instanceof Error ? err.message : String(err)}` };
+          }
+          markOutbound(b.key);
+          log("permit.sent", { reqId, key: b.key, tool: permitReq.tool });
+          return await new Promise((resolve2) => {
+            const p = {
+              reqId,
+              key: b.key,
+              root: b.root,
+              chatId: b.chatId,
+              messageId,
+              label: b.label,
+              // Only `options` is read off this — by the button callback, to
+              // turn an option id back into the label the CLI maps to a decision.
+              payload: {
+                title: permitReq.tool,
+                doing: "",
+                description: "",
+                blocker: "",
+                options: [
+                  { id: "allow", label: PERMIT_ALLOW, consequence: "" },
+                  { id: "deny", label: PERMIT_DENY, consequence: "" }
+                ],
+                recommend: "",
+                reasoning: "",
+                question: ""
+              },
+              render,
+              watchPane: req.caller.paneId,
+              settle: resolve2,
+              done: false,
+              timer: setTimeout(() => {
+                void closeWithout(p, "timedout", { ok: false, code: 2, message: "\u6CA1\u7B49\u5230\u6279\u51C6" });
+              }, req.timeoutMs)
+            };
+            pendings.set(reqId, p);
+            ctx.onClose(() => {
+              if (!p.done) void closeWithout(p, "cancelled", { ok: false, code: 3, message: "\u786E\u8BA4\u65B9\u65AD\u5F00\u4E86" });
+            });
           });
         }
         default:
@@ -138409,6 +138510,8 @@ var HELP = `herdr-lark \u2014 \u628A herdr \u91CC\u8DD1\u7740\u7684 agent \u4F1A
   mirror                             Claude Code \u7684 Stop \u94A9\u5B50\u4E13\u7528\uFF1A\u4ECE stdin \u8BFB\u94A9\u5B50 JSON\uFF0C
                                      \u628A\u521A\u7ED3\u675F\u90A3\u4E00\u8F6E\u7684\u539F\u6587\u540C\u6B65\u5230\u7FA4\uFF08\u5DF2\u540C\u6B65\u8FC7\u5C31\u8DF3\u8FC7\uFF09\u3002
                                      \u4E0D\u8981\u624B\u5DE5\u8C03\u7528\uFF0C\u89C1 examples/hooks/\u3002
+  permit                             Claude Code \u7684 PermissionRequest \u94A9\u5B50\u4E13\u7528\uFF1A\u8FDC\u7A0B\u6A21\u5F0F\u4E0B\u628A\u6743\u9650\u786E\u8BA4
+                                     \u505A\u6210\u300C\u5141\u8BB8 / \u62D2\u7EDD\u300D\u6309\u94AE\u5361\u63A8\u5230\u98DE\u4E66\uFF0C\u6309\u4F60\u70B9\u7684\u56DE\u7B54\u3002\u89C1 examples/hooks/\u3002
   guard-ask                          Claude Code \u7684 PreToolUse \u94A9\u5B50\u4E13\u7528\uFF1A\u8FDC\u7A0B\u6A21\u5F0F\u4E0B\u62E6\u4F4F\u7EC8\u7AEF\u81EA\u5E26\u7684
                                      \u9009\u62E9\u6846\uFF0C\u8BA9 agent \u6539\u7528 ask \u63A8\u5230\u98DE\u4E66\u3002\u89C1 examples/hooks/\u3002
 
@@ -138819,6 +138922,44 @@ async function cmdGuardAsk() {
   } catch {
   }
 }
+var PERMIT_WAIT_MS = 55 * 6e4;
+function describeToolCall(tool, input) {
+  const str2 = (k) => typeof input[k] === "string" ? input[k] : void 0;
+  const summary = str2("description");
+  const direct = str2("command") ?? str2("file_path") ?? str2("notebook_path") ?? str2("url") ?? str2("query") ?? str2("pattern");
+  if (direct) return { summary, detail: direct };
+  const json = JSON.stringify(input, null, 2);
+  return { summary, detail: json.length > 1500 ? `${json.slice(0, 1500)}
+\u2026` : json };
+}
+async function cmdPermit() {
+  try {
+    const payload = JSON.parse(await readStdin());
+    if (payload.hook_event_name !== "PermissionRequest" || !payload.session_id || !payload.tool_name) return;
+    const root = projectRoot();
+    const res = await request(
+      {
+        type: "permit",
+        caller: {
+          key: `sess:${payload.session_id}`,
+          sessionId: payload.session_id,
+          root,
+          project: projectLabel(root),
+          task: null,
+          paneId: currentPaneId()
+        },
+        req: { tool: payload.tool_name, ...describeToolCall(payload.tool_name, payload.tool_input ?? {}) },
+        timeoutMs: PERMIT_WAIT_MS
+      },
+      { timeoutMs: PERMIT_WAIT_MS + 6e4 }
+    );
+    if (!res.ok || res.kind !== "ask") return;
+    const decision = res.reply === "\u5141\u8BB8" ? { behavior: "allow" } : res.reply === "\u62D2\u7EDD" ? { behavior: "deny", message: "\u7528\u6237\u5728\u98DE\u4E66\u4E0A\u62D2\u7EDD\u4E86\u8FD9\u6B21\u64CD\u4F5C\u3002" } : { behavior: "deny", message: `\u7528\u6237\u5728\u98DE\u4E66\u4E0A\u6CA1\u6709\u6279\u51C6\uFF0C\u5E76\u8BF4\uFF1A${res.reply}` };
+    process.stdout.write(`${JSON.stringify({ hookSpecificOutput: { hookEventName: "PermissionRequest", decision } })}
+`);
+  } catch {
+  }
+}
 async function cmdSendFile(args) {
   const c = caller();
   const root = c.root;
@@ -138963,6 +139104,8 @@ async function main() {
       return cmdMirror();
     case "guard-ask":
       return cmdGuardAsk();
+    case "permit":
+      return cmdPermit();
     case "send-file":
       return cmdSendFile(args);
     case "away":

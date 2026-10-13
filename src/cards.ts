@@ -181,6 +181,82 @@ export function askCard(ctx: AskCardContext): object {
   );
 }
 
+/** The two answers a permission card offers, by option id. */
+export const PERMIT_ALLOW = '允许';
+export const PERMIT_DENY = '拒绝';
+
+export interface PermitRequest {
+  /** Tool name as Claude Code reports it: Bash, Edit, WebFetch, mcp__… */
+  tool: string;
+  /** The agent's own one-line account of what the call is for, when it gave one. */
+  summary?: string;
+  /** What will actually run or change — a command, a path, a URL. */
+  detail: string;
+}
+
+/**
+ * Claude Code asking permission to run a tool, as a card with the two answers
+ * on it.
+ *
+ * Not an ask card: there is no agent behind it weighing options — the agent is
+ * already stopped, waiting on the harness — so there is no recommendation, no
+ * reasoning, nothing but the call itself. Showing the call verbatim is the
+ * whole job; a human approving `rm -rf` on a summary is approving blind.
+ */
+export function permitCard(ctx: {
+  projectLabel: string;
+  reqId: string;
+  req: PermitRequest;
+  state: AskState;
+  reply?: string;
+}): object {
+  const { req, state, reply } = ctx;
+  const outcome =
+    state === 'answered'
+      ? reply === PERMIT_ALLOW
+        ? '已允许'
+        : reply === PERMIT_DENY
+          ? '已拒绝'
+          : '已拒绝，并把你的话转给了它'
+      : state === 'timedout'
+        ? '已超时'
+        : state === 'cancelled'
+          ? '已在终端处理'
+          : '';
+  const elements: object[] = [];
+  if (req.summary) elements.push(md(req.summary));
+  elements.push(md(`\`\`\`\n${req.detail}\n\`\`\``));
+
+  if (state === 'pending') {
+    elements.push(
+      { tag: 'button', text: { tag: 'plain_text', content: PERMIT_ALLOW }, type: 'primary', value: { reqId: ctx.reqId, optionId: 'allow' } },
+      { tag: 'button', text: { tag: 'plain_text', content: PERMIT_DENY }, type: 'default', value: { reqId: ctx.reqId, optionId: 'deny' } },
+      note('想拒绝并告诉它该怎么做，直接在群里打字，那句话会原样转给它。'),
+    );
+  } else {
+    elements.push(
+      hr(),
+      state === 'answered' && reply
+        ? md(reply === PERMIT_ALLOW || reply === PERMIT_DENY ? `✅ **${reply}**` : `✅ **拒绝**，并转告它：${reply}`)
+        : note(
+            state === 'timedout'
+              ? '⌛ 没等到你，终端里的确认框还在等。'
+              : '⚠️ 这个确认已经在终端里处理掉了。',
+          ),
+    );
+  }
+
+  const head = state === 'pending' ? { template: 'orange', icon: '🔐' } : HEADER[state];
+  return card(
+    {
+      icon: head.icon,
+      title: `[${ctx.projectLabel}] 要你批准：${req.tool}${outcome ? ` · ${outcome}` : ''}`,
+      template: head.template,
+    },
+    elements,
+  );
+}
+
 /** A conversational reply: the terminal answer, mirrored verbatim. */
 /**
  * Whether the session that sent this reply is still mid-turn. A `say` card is

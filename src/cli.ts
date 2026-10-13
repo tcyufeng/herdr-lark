@@ -44,6 +44,8 @@ const HELP = `herdr-lark — 把 herdr 里跑着的 agent 会话接到飞书
   mirror                             Claude Code 的 Stop 钩子专用：从 stdin 读钩子 JSON，
                                      把刚结束那一轮的原文同步到群（已同步过就跳过）。
                                      不要手工调用，见 examples/hooks/。
+  permit                             Claude Code 的 PermissionRequest 钩子专用：远程模式下把权限确认
+                                     做成「允许 / 拒绝」按钮卡推到飞书，按你点的回答。见 examples/hooks/。
   guard-ask                          Claude Code 的 PreToolUse 钩子专用：远程模式下拦住终端自带的
                                      选择框，让 agent 改用 ask 推到飞书。见 examples/hooks/。
 
@@ -547,6 +549,66 @@ async function cmdGuardAsk(): Promise<void> {
   }
 }
 
+/** How long a permission card waits on the phone before handing back to the terminal. */
+const PERMIT_WAIT_MS = 55 * 60_000;
+
+/** What a tool call will actually do, in the form a human can judge at a glance. */
+function describeToolCall(tool: string, input: Record<string, unknown>): { summary?: string; detail: string } {
+  const str = (k: string): string | undefined => (typeof input[k] === 'string' ? (input[k] as string) : undefined);
+  const summary = str('description');
+  const direct = str('command') ?? str('file_path') ?? str('notebook_path') ?? str('url') ?? str('query') ?? str('pattern');
+  if (direct) return { summary, detail: direct };
+  const json = JSON.stringify(input, null, 2);
+  return { summary, detail: json.length > 1500 ? `${json.slice(0, 1500)}\n…` : json };
+}
+
+/**
+ * Claude Code `PermissionRequest` hook: put the permission prompt on the phone
+ * as a card with 允许 / 拒绝, and answer the prompt with what the human taps.
+ *
+ * In remote mode only. Otherwise — and on a timeout, a daemon that is down, or
+ * anything unexpected — it prints nothing, which leaves the permission flow
+ * exactly as it would be without this hook: the prompt in the terminal.
+ */
+async function cmdPermit(): Promise<void> {
+  try {
+    const payload = JSON.parse(await readStdin()) as {
+      hook_event_name?: string;
+      session_id?: string;
+      tool_name?: string;
+      tool_input?: Record<string, unknown>;
+    };
+    if (payload.hook_event_name !== 'PermissionRequest' || !payload.session_id || !payload.tool_name) return;
+    const root = projectRoot();
+    const res = await request(
+      {
+        type: 'permit',
+        caller: {
+          key: `sess:${payload.session_id}`,
+          sessionId: payload.session_id,
+          root,
+          project: projectLabel(root),
+          task: null,
+          paneId: currentPaneId(),
+        },
+        req: { tool: payload.tool_name, ...describeToolCall(payload.tool_name, payload.tool_input ?? {}) },
+        timeoutMs: PERMIT_WAIT_MS,
+      },
+      { timeoutMs: PERMIT_WAIT_MS + 60_000 },
+    );
+    if (!res.ok || res.kind !== 'ask') return;
+    const decision =
+      res.reply === '允许'
+        ? { behavior: 'allow' }
+        : res.reply === '拒绝'
+          ? { behavior: 'deny', message: '用户在飞书上拒绝了这次操作。' }
+          : { behavior: 'deny', message: `用户在飞书上没有批准，并说：${res.reply}` };
+    process.stdout.write(`${JSON.stringify({ hookSpecificOutput: { hookEventName: 'PermissionRequest', decision } })}\n`);
+  } catch {
+    // No decision: the terminal prompt stands.
+  }
+}
+
 async function cmdSendFile(args: string[]): Promise<void> {
   const c = caller();
   const root = c.root;
@@ -710,6 +772,8 @@ async function main(): Promise<void> {
       return cmdMirror();
     case 'guard-ask':
       return cmdGuardAsk();
+    case 'permit':
+      return cmdPermit();
     case 'send-file':
       return cmdSendFile(args);
     case 'away':
