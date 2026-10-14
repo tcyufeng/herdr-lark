@@ -59,7 +59,7 @@ cp .agents/skills/herdr-lark/examples/remote-mode-rule.md ~/.claude/rules/
 | You say | The agent runs |
 |---|---|
 | "I'm heading out", "reach me on my phone" | `herdr-lark away on` |
-| "I'm back" | `herdr-lark away off --all` |
+| *(nothing — turning it off is never inferred)* | — |
 
 While remote mode is on, every reply it writes in the terminal is mirrored **verbatim** into the group, decisions arrive as cards with buttons, and you get a push when the agent is stuck on a prompt only you can answer.
 
@@ -75,8 +75,9 @@ cp .agents/skills/herdr-lark/examples/commands/*.md ~/.claude/commands/
 
 `/away-on` · `/away-on-all` · `/away-off` · `/away-off-all` · `/away-status`
 
-Turning it on covers the session you are in; `--all` (and `/away-off-all`) covers every bound session,
-because someone who says "I'm back" is back as a person, not back in one directory.
+Turning it on covers the session you are in. Turning it **off only happens when you type `/away-off`
+(this session) or `/away-off-all` (every session)** — the agent never infers it from "I'm back" or anything
+else you say. Left on, it costs a few extra pushes; switched off by mistake, you go dark while away from the desk.
 
 ## When the agent forgets to mirror
 

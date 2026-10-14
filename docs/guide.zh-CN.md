@@ -44,7 +44,7 @@ HERDR_LARK_APP_ID=cli_xxx HERDR_LARK_APP_SECRET=xxx herdr-lark setup
 
 ## 用
 
-日常你不用碰这些命令——把 [`examples/remote-mode-rule.md`](../examples/remote-mode-rule.md) 拷到 `~/.claude/rules/`，然后直接对 agent 说「我走了」「我回来了」就行。
+日常你不用碰这些命令——把 [`examples/remote-mode-rule.md`](../examples/remote-mode-rule.md) 拷到 `~/.claude/rules/`，然后直接对 agent 说「我走了」就行；回来后打 `/away-off-all` 关掉（关不靠说话，只认命令）。
 
 ```bash
 herdr-lark ask <<'JSON'      # 推一张提问卡，阻塞等答复，答复到 stdout

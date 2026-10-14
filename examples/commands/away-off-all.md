@@ -1,5 +1,6 @@
 ---
-description: 我回来了 —— 关闭所有会话的飞书远程模式
+description: 关闭所有会话的飞书远程模式
+disable-model-invocation: true
 ---
 用户回到键盘前了。人只有一个，回来就是所有会话都回来了。
 

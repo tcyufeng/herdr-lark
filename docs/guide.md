@@ -44,7 +44,7 @@ HERDR_LARK_APP_ID=cli_xxx HERDR_LARK_APP_SECRET=xxx herdr-lark setup
 
 ## Use
 
-Day to day you don't touch these commands. Copy [`examples/remote-mode-rule.md`](../examples/remote-mode-rule.md) into `~/.claude/rules/` and just tell your agent "I'm heading out" / "I'm back".
+Day to day you don't touch these commands. Copy [`examples/remote-mode-rule.md`](../examples/remote-mode-rule.md) into `~/.claude/rules/` and just tell your agent "I'm heading out"; when you are back, type `/away-off-all` (turning it off is never inferred from what you say).
 
 ```bash
 herdr-lark ask <<'JSON'      # push a question card, block, print the answer on stdout
